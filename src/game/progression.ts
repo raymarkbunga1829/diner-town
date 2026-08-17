@@ -32,9 +32,13 @@ export function menuCapacity(level: number): number {
   return Math.min(12, 4 + Math.floor(level / 2));
 }
 
-/** Employees that may be on the payroll at once. */
+/**
+ * Employees that may be on the payroll at once. Three from the start so a new
+ * player can run a waiter, a chef and a cleaner, which is the minimum viable
+ * kitchen the tutorial asks them to build.
+ */
 export function staffCapacity(level: number): number {
-  return Math.min(12, 2 + Math.floor(level / 2));
+  return Math.min(12, 3 + Math.floor(level / 2));
 }
 
 export const MIN_GRID = 8;

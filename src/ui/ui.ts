@@ -31,7 +31,6 @@ export class UI {
   private topbar!: HTMLElement;
   private coinsEl!: HTMLElement;
   private levelEl!: HTMLElement;
-  private levelBar!: HTMLElement;
   private ratingEl!: HTMLElement;
   private clockEl!: HTMLElement;
   private dock!: HTMLElement;
@@ -155,7 +154,7 @@ export class UI {
       this.cache.xp = d.xp;
       clear(this.levelEl);
       const pct = prog.level >= MAX_LEVEL ? 100 : (prog.into / prog.span) * 100;
-      this.levelBar = el('i', { style: `width:${pct.toFixed(1)}%` });
+      const levelBar = el('i', { style: `width:${pct.toFixed(1)}%` });
       this.levelEl.append(
         el('div', { class: 'level-row' }, [
           el('span', { text: `Level ${prog.level}` }),
@@ -164,7 +163,7 @@ export class UI {
             text: prog.level >= MAX_LEVEL ? 'MAX' : `${Math.floor(prog.into)}/${prog.span}`,
           }),
         ]),
-        el('div', { class: 'bar' }, [this.levelBar]),
+        el('div', { class: 'bar' }, [levelBar]),
       );
     }
 

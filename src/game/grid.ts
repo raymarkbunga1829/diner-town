@@ -193,6 +193,31 @@ export class Grid {
     return true;
   }
 
+  /**
+   * Map a fractional tile pick onto the back-wall cell the pointer is over.
+   *
+   * The walls are drawn as vertical planes rising from the `ty = 0` and `tx = 0`
+   * edges, so a point `k` tiles up the north-east wall inverts to the grid
+   * position `(index + u - k, -k)`. Recovering `index` is therefore just
+   * `floor(tx - ty)`, and the mirrored case gives `floor(ty - tx)`. World-space
+   * x decides which of the two walls the pointer is actually over.
+   */
+  resolveWallTarget(tx: number, ty: number): [number, number] | null {
+    if (this.isInterior(Math.floor(tx), Math.floor(ty))) return null;
+
+    if (tx >= ty) {
+      if (ty >= 0) return null;
+      const index = Math.floor(tx - ty);
+      if (index < 0 || index >= this.size || index === this.doorX) return null;
+      return [index, -1];
+    }
+
+    if (tx >= 0) return null;
+    const index = Math.floor(ty - tx);
+    if (index < 0 || index >= this.size) return null;
+    return [-1, index];
+  }
+
   /** Walkable tiles orthogonally touching a placed item's footprint. */
   accessTiles(p: Placed): Array<[number, number]> {
     const def = this.game.defOf(p);

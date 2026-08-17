@@ -591,8 +591,34 @@ export class Renderer {
     const def = FURNITURE_BY_ID[preview.defId];
     if (!def) return;
     const { ctx } = this;
-    const tiles = footprint(def, preview.tx, preview.ty, preview.rot);
 
+    if (def.role === 'wallDecor') {
+      const onNorthEast = preview.ty === -1;
+      const base = onNorthEast
+        ? tileToWorld(preview.tx + 0.5, 0)
+        : tileToWorld(0, preview.ty + 0.5);
+      if (preview.tx !== -1 && !onNorthEast) return;
+
+      // Outline the wall panel the item would hang on.
+      const a = onNorthEast ? tileToWorld(preview.tx, 0) : tileToWorld(0, preview.ty);
+      const b = onNorthEast ? tileToWorld(preview.tx + 1, 0) : tileToWorld(0, preview.ty + 1);
+      const h = WALL_HEIGHT * TILE_Z;
+      ctx.save();
+      ctx.fillStyle = preview.valid ? 'rgba(110, 220, 150, 0.3)' : 'rgba(230, 90, 80, 0.3)';
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y - h);
+      ctx.lineTo(b.x, b.y - h);
+      ctx.lineTo(b.x, b.y);
+      ctx.lineTo(a.x, a.y);
+      ctx.closePath();
+      ctx.fill();
+      ctx.globalAlpha = 0.7;
+      drawWallItem(ctx, def, base.x, base.y, onNorthEast ? 'ne' : 'nw', opts.time);
+      ctx.restore();
+      return;
+    }
+
+    const tiles = footprint(def, preview.tx, preview.ty, preview.rot);
     for (const [tx, ty] of tiles) {
       const c = this.tileCentre(tx, ty);
       diamondPath(ctx, c.x, c.y, 0.98, 0.98);
@@ -601,23 +627,6 @@ export class Renderer {
       ctx.strokeStyle = preview.valid ? '#7ce0a4' : '#f07a6e';
       ctx.lineWidth = 2;
       ctx.stroke();
-    }
-
-    if (def.role === 'wallDecor') {
-      if (preview.ty === -1) {
-        const base = tileToWorld(preview.tx + 0.5, 0);
-        ctx.save();
-        ctx.globalAlpha = 0.65;
-        drawWallItem(ctx, def, base.x, base.y, 'ne', opts.time);
-        ctx.restore();
-      } else if (preview.tx === -1) {
-        const base = tileToWorld(0, preview.ty + 0.5);
-        ctx.save();
-        ctx.globalAlpha = 0.65;
-        drawWallItem(ctx, def, base.x, base.y, 'nw', opts.time);
-        ctx.restore();
-      }
-      return;
     }
 
     let sx = 0;

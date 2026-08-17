@@ -40,7 +40,8 @@ class App implements AppApi {
   private placingRot: 0 | 1 | 2 | 3 = 0;
   private selectedUid: number | null = null;
 
-  private hoverTile: { tx: number; ty: number } | null = null;
+  /** Last pointer position in fractional tile space, before any snapping. */
+  private hoverFrac: { tx: number; ty: number } | null = null;
   private lastFrame = performance.now();
   private clock = 0;
   private saveTimer = 0;
@@ -142,7 +143,10 @@ class App implements AppApi {
     this.ctx.scale(this.dpr, this.dpr);
     this.renderer.render({
       time: this.clock,
-      hoverTile: this.mode === 'build' ? this.hoverTile : null,
+      hoverTile:
+        this.mode === 'build' && this.hoverFrac
+          ? { tx: Math.floor(this.hoverFrac.tx), ty: Math.floor(this.hoverFrac.ty) }
+          : null,
       preview: this.buildPreview(),
       buildMode: this.mode === 'build',
       selectedUid: this.selectedUid,
@@ -249,22 +253,43 @@ class App implements AppApi {
 
   private onHover(p: Point | null): void {
     if (!p) {
-      this.hoverTile = null;
+      this.hoverFrac = null;
       return;
     }
     const t = this.camera.screenToTile(p.x, p.y);
-    this.hoverTile = { tx: Math.floor(t.tx), ty: Math.floor(t.ty) };
+    this.hoverFrac = { tx: t.tx, ty: t.ty };
   }
 
   private onTap(p: Point): void {
     audio.unlock();
     const t = this.camera.screenToTile(p.x, p.y);
-    const tx = Math.floor(t.tx);
-    const ty = Math.floor(t.ty);
-    this.hoverTile = { tx, ty };
+    this.hoverFrac = { tx: t.tx, ty: t.ty };
 
-    if (this.mode === 'build') this.onBuildTap(tx, ty);
-    else this.onPlayTap(tx, ty);
+    if (this.mode === 'build') this.onBuildTap();
+    else this.onPlayTap(Math.floor(t.tx), Math.floor(t.ty));
+  }
+
+  /**
+   * Turn a fractional pick into the tile an item would occupy. Wall decor snaps
+   * onto the back wall the pointer is over rather than the floor cell behind it.
+   */
+  private tileFor(fx: number, fy: number, defId: string | null): { tx: number; ty: number } {
+    if (defId) {
+      const def = FURNITURE_BY_ID[defId];
+      if (def && isWallMounted(def.role)) {
+        const wall = this.sim.grid.resolveWallTarget(fx, fy);
+        if (wall) return { tx: wall[0], ty: wall[1] };
+      }
+    }
+    return { tx: Math.floor(fx), ty: Math.floor(fy) };
+  }
+
+  /** Whatever the pointer is over: floor furniture first, then wall decor. */
+  private pickAt(fx: number, fy: number): Placed | undefined {
+    const direct = this.sim.grid.anyAt(Math.floor(fx), Math.floor(fy));
+    if (direct) return direct;
+    const wall = this.sim.grid.resolveWallTarget(fx, fy);
+    return wall ? this.sim.grid.wallAt(wall[0], wall[1]) : undefined;
   }
 
   private onPlayTap(tx: number, ty: number): void {
@@ -301,17 +326,22 @@ class App implements AppApi {
     }
   }
 
-  private onBuildTap(tx: number, ty: number): void {
+  private onBuildTap(): void {
+    if (!this.hoverFrac) return;
+    const { tx: fx, ty: fy } = this.hoverFrac;
+
     if (this.placingDefId) {
-      this.tryPlace(this.placingDefId, tx, ty);
+      const target = this.tileFor(fx, fy, this.placingDefId);
+      this.tryPlace(this.placingDefId, target.tx, target.ty);
       return;
     }
 
-    const existing = this.sim.grid.anyAt(tx, ty);
+    const existing = this.pickAt(fx, fy);
     if (this.selectedUid !== null) {
       const selected = this.game.placedByUid(this.selectedUid);
       if (selected && (!existing || existing.uid !== selected.uid)) {
-        this.tryMove(selected, tx, ty);
+        const target = this.tileFor(fx, fy, selected.defId);
+        this.tryMove(selected, target.tx, target.ty);
         return;
       }
     }
@@ -323,12 +353,13 @@ class App implements AppApi {
   // --------------------------------------------------------------- building
 
   private buildPreview(): BuildPreview | null {
-    if (this.mode !== 'build' || !this.hoverTile) return null;
-    const { tx, ty } = this.hoverTile;
+    if (this.mode !== 'build' || !this.hoverFrac) return null;
+    const { tx: fx, ty: fy } = this.hoverFrac;
 
     if (this.placingDefId) {
       const def = FURNITURE_BY_ID[this.placingDefId];
       if (!def) return null;
+      const { tx, ty } = this.tileFor(fx, fy, def.id);
       return {
         defId: def.id,
         tx,
@@ -343,6 +374,7 @@ class App implements AppApi {
       if (!selected) return null;
       const def = this.game.defOf(selected);
       if (!def) return null;
+      const { tx, ty } = this.tileFor(fx, fy, def.id);
       if (selected.tx === tx && selected.ty === ty) return null;
       return {
         defId: def.id,
@@ -693,6 +725,18 @@ function boot(): void {
     game.data.seenIntro = true;
     game.save();
   }
+
+  registerServiceWorker();
+}
+
+/** Cache the build so the game keeps working with no connection. */
+function registerServiceWorker(): void {
+  if (!import.meta.env.PROD || !('serviceWorker' in navigator)) return;
+  window.addEventListener('load', () => {
+    void navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`).catch(() => {
+      // Offline support is a bonus; a failed registration must not break play.
+    });
+  });
 }
 
 boot();
