@@ -1069,6 +1069,11 @@ button:not(:disabled),
   }
 }
 
+/*
+ * Six dock buttons at their default width overflow every mainstream phone
+ * (390px on an iPhone 12-15, 393px on a Pixel), which clips the last label. Step
+ * the buttons down so the whole dock fits without scrolling.
+ */
 @media (max-width: 430px) {
   .brand-pill span:not(.mark) {
     display: none;
@@ -1077,11 +1082,11 @@ button:not(:disabled),
   .buildbar .label {
     display: none;
   }
-}
 
-@media (max-width: 380px) {
   .dock-btn {
-    min-width: 54px;
+    min-width: 50px;
+    padding-left: 5px;
+    padding-right: 5px;
     font-size: 9.5px;
   }
 
@@ -1092,5 +1097,22 @@ button:not(:disabled),
   .pill {
     padding: 6px 10px;
     font-size: 13px;
+  }
+}
+
+@media (max-width: 365px) {
+  .dock {
+    gap: 3px;
+  }
+
+  .dock-btn {
+    min-width: 44px;
+    padding-left: 3px;
+    padding-right: 3px;
+    font-size: 9px;
+  }
+
+  .dock-btn .glyph {
+    font-size: 16px;
   }
 }

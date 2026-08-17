@@ -102,15 +102,24 @@ class App implements AppApi {
   private centreCamera(snap = false): void {
     const size = this.game.data.gridSize;
     const centre = tileToWorld(size / 2, size / 2);
-    const worldW = size * TILE_W + 200;
-    const worldH = size * TILE_H + 300;
-    const zoom = clamp(
-      Math.min(this.camera.viewW / worldW, this.camera.viewH / worldH),
-      0.5,
-      1.5,
-    );
-    if (snap) this.camera.snapTo(centre.x, centre.y - 30, zoom);
-    else this.camera.glideTo(centre.x, centre.y - 30);
+    // Margin covers the walls standing above the floor plus a little breathing
+    // room; the fit is then pushed in slightly because letting the room bleed a
+    // touch past the edges looks better than stranding it in empty space, and the
+    // player can always pan.
+    const worldW = size * TILE_W + 120;
+    const worldH = size * TILE_H + 220;
+    const fit = Math.min(this.camera.viewW / worldW, this.camera.viewH / worldH);
+    // A tall phone screen is limited by width, which leaves the room stranded in
+    // empty sky. Push in further there and let it bleed past the sides a little,
+    // since panning is cheap and legible diners matter more.
+    const portrait = this.camera.viewH > this.camera.viewW * 1.3;
+    const zoom = clamp(fit * (portrait ? 1.45 : 1.18), 0.62, 1.7);
+    // The walls rise above the floor, so nudge the framing down to keep them in
+    // shot. On a phone the dock eats the bottom of the screen instead, so there
+    // the room wants lifting rather than dropping.
+    const yBias = portrait ? -60 : 30;
+    if (snap) this.camera.snapTo(centre.x, centre.y - yBias, zoom);
+    else this.camera.glideTo(centre.x, centre.y - yBias);
   }
 
   start(): void {

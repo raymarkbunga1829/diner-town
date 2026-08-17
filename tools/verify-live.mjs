@@ -39,6 +39,10 @@ if (!URL_UNDER_TEST) {
   process.exit(2);
 }
 
+// A local dev server is served over plain http and has no warmed service worker
+// cache, so those two checks only make sense against a real deployment.
+const isDevServer = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/.test(URL_UNDER_TEST);
+
 const [, VIEW_W = '1440', VIEW_H = '900'] = /^(\d+)x(\d+)$/.exec(process.argv[3] ?? '') ?? [];
 const width = Number(VIEW_W);
 const height = Number(VIEW_H);
@@ -292,6 +296,7 @@ const panels = await evaluate(`(async () => {
 const layout = await evaluate(`(() => {
   const dock = document.querySelector('.dock');
   const rect = dock?.getBoundingClientRect();
+  const buttons = dock ? [...dock.querySelectorAll('button')] : [];
   return {
     horizontalOverflow: document.documentElement.scrollWidth - window.innerWidth,
     innerWidth: window.innerWidth,
@@ -300,6 +305,13 @@ const layout = await evaluate(`(() => {
       ? rect.left >= -1 && rect.right <= window.innerWidth + 1 && rect.bottom <= window.innerHeight + 1
       : null,
     dockRect: rect ? { l: Math.round(rect.left), r: Math.round(rect.right), b: Math.round(rect.bottom) } : null,
+    // The dock scrolls when it does not fit, which silently clips the last
+    // button's label, so check the content width rather than just the box.
+    dockClippedBy: dock ? dock.scrollWidth - dock.clientWidth : null,
+    dockLabelsTruncated: buttons.filter((b) => {
+      const span = b.querySelector('span');
+      return span ? span.scrollWidth > span.clientWidth + 0.5 : false;
+    }).length,
   };
 })()`);
 
@@ -341,7 +353,11 @@ console.log(JSON.stringify(panels, null, 2));
 console.log('\n=== layout ===');
 console.log(JSON.stringify(layout, null, 2));
 console.log('\n=== offline reload (service worker) ===');
-console.log(JSON.stringify(offline, null, 2));
+console.log(
+  isDevServer
+    ? '(skipped: dev server has no warmed service worker cache)'
+    : JSON.stringify(offline, null, 2),
+);
 // Synthetic clicks are not a user activation gesture, so Chrome refuses to start
 // the AudioContext and warns once per attempt. That is an artefact of driving the
 // page from script, not a fault in the build.
@@ -361,7 +377,9 @@ console.log(httpFailures.length ? httpFailures.join('\n') : '(none)');
 
 const problems = [];
 if (!probe) problems.push('page probe returned nothing');
-if (probe && !probe.origin.startsWith('https://')) problems.push(`not served over https: ${probe.origin}`);
+if (probe && !isDevServer && !probe.origin.startsWith('https://')) {
+  problems.push(`not served over https: ${probe.origin}`);
+}
 if (probe && !probe.canvas) problems.push('no canvas element');
 if (probe && probe.bootVisible) problems.push('boot screen never cleared');
 if (probe && probe.dockButtons === 0) problems.push('no dock buttons rendered');
@@ -381,8 +399,20 @@ if (layout && layout.horizontalOverflow > 1) {
 if (layout && layout.dockWithinViewport === false) {
   problems.push(`dock sits outside the viewport: ${JSON.stringify(layout.dockRect)}`);
 }
-if (offline && !offline.booted) problems.push('game did not boot offline (service worker fallback failed)');
-if (offline && offline.dockButtons === 0) problems.push('no dock buttons after the offline reload');
+if (layout && layout.dockClippedBy > 0) {
+  problems.push(`dock does not fit and clips by ${layout.dockClippedBy}px`);
+}
+if (layout && layout.dockLabelsTruncated > 0) {
+  problems.push(`${layout.dockLabelsTruncated} dock label(s) truncated`);
+}
+if (!isDevServer) {
+  if (offline && !offline.booted) {
+    problems.push('game did not boot offline (service worker fallback failed)');
+  }
+  if (offline && offline.dockButtons === 0) {
+    problems.push('no dock buttons after the offline reload');
+  }
+}
 if (exceptions.length) problems.push(`${exceptions.length} uncaught exception(s)`);
 if (httpFailures.length) problems.push(`${httpFailures.length} failed request(s)`);
 

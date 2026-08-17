@@ -1,4 +1,5 @@
 import { TILE_H, TILE_W, TILE_Z, type Facing } from '../engine/iso';
+import { hashString } from '../engine/rng';
 import type { Dish, PlateStyle } from '../game/data/dishes';
 import type { FurnitureDef } from '../game/data/furniture';
 import type { Ingredient } from '../game/data/ingredients';
@@ -51,6 +52,8 @@ export function drawFurniture(
       legs(ctx, cx, cy, 0.5, 0.52, pal.shade);
       isoBox(ctx, cx, cy, 0.82, 0.82, 0.09, faces(pal.base), 0.52);
       isoBox(ctx, cx, cy, 0.7, 0.7, 0.01, faces(pal.top), 0.61);
+      woodGrain(ctx, cx, cy, 0.62, 0.68, withAlpha(pal.shade, 0.2));
+      tableSetting(ctx, cx, cy, 0.62, opts.time);
       break;
     }
     case 'tableRound': {
@@ -59,6 +62,7 @@ export function drawFurniture(
       isoEllipse(ctx, cx, cy, 0.4, shade(pal.base, 0.8), 0.5);
       isoEllipse(ctx, cx, cy, 0.4, pal.top, 0.56);
       isoEllipse(ctx, cx, cy, 0.3, shade(pal.top, 1.06), 0.565);
+      tableSetting(ctx, cx, cy, 0.57, opts.time);
       break;
     }
     case 'tableMarble': {
@@ -77,6 +81,7 @@ export function drawFurniture(
         ctx.stroke();
       }
       ctx.restore();
+      tableSetting(ctx, cx, cy, 0.61, opts.time);
       break;
     }
     case 'tableBooth': {
@@ -86,6 +91,8 @@ export function drawFurniture(
       isoBox(ctx, cx + TILE_W * 0.24, cy - TILE_H * 0.24, 0.95, 0.2, 0.62, faces(shade(pal.base, 0.92)));
       legs(ctx, cx, cy, 0.42, 0.5, pal.shade);
       isoBox(ctx, cx, cy, 0.72, 0.72, 0.09, faces(pal.top), 0.5);
+      woodGrain(ctx, cx, cy, 0.6, 0.7, withAlpha(pal.shade, 0.2));
+      tableSetting(ctx, cx, cy, 0.6, opts.time);
       break;
     }
 
@@ -555,6 +562,9 @@ export function drawWallItem(
 
 // ---------------------------------------------------------------- people
 
+/** Overall figure scale, on top of each character's own build. */
+const PERSON_SCALE = 1.1;
+
 export interface PersonOptions {
   facing: Facing;
   /** Seconds; drives the walk cycle and idle breathing. */
@@ -585,13 +595,22 @@ export function drawPerson(
 ): void {
   const away = opts.facing === 'ne' || opts.facing === 'nw';
   const flip = opts.facing === 'sw' || opts.facing === 'nw';
-  const s = look.build;
+  // Diners are drawn a little larger than life so their faces and uniforms still
+  // read at the default zoom, where a tile is only 64px wide.
+  const s = look.build * PERSON_SCALE;
   const shirt = opts.uniform?.shirt ?? look.shirt;
   const trim = opts.uniform?.trim ?? shade(shirt, 0.7);
 
   const stride = opts.walking ? Math.sin(opts.time * 9) : 0;
   const bob = opts.walking ? Math.abs(Math.cos(opts.time * 9)) * 1.6 : Math.sin(opts.time * 1.6) * 0.5;
   const seatDrop = opts.sitting ? 7 : 0;
+
+  // Light falls from the upper left, so the -x side of every limb is the lit one.
+  const shirtLit = shade(shirt, 1.1);
+  const shirtDark = shade(shirt, 0.82);
+  const pantsDark = shade(look.pants, 0.8);
+  const skinShade = shade(look.skin, 0.9);
+  const ink = 'rgba(38, 26, 20, 0.5)';
 
   ctx.save();
   if (opts.alpha !== undefined) ctx.globalAlpha = opts.alpha;
@@ -600,40 +619,81 @@ export function drawPerson(
   ctx.translate(cx, cy - bob + seatDrop);
   if (flip) ctx.scale(-1, 1);
 
+  // Short body under an oversized head: the house chibi proportions.
   const legTop = -11 * s;
   const bodyTop = -22 * s;
   const headY = -32 * s;
+  const headR = 10.6 * s;
 
-  // Legs
+  // ------------------------------------------------------------------- legs
   ctx.fillStyle = look.pants;
   if (opts.sitting) {
-    // Thighs forward, shins down.
-    roundRect(ctx, -6 * s, legTop, 12 * s, 6 * s, 3);
+    // Thighs forward, shins dropping to the floor.
+    roundRect(ctx, -6 * s, legTop, 12 * s, 5.5 * s, 3);
     ctx.fill();
-    roundRect(ctx, -5.5 * s, legTop + 5 * s, 4.5 * s, 9 * s, 2);
+    ctx.fillStyle = pantsDark;
+    roundRect(ctx, -5.5 * s, legTop + 4.6 * s, 4.5 * s, 7.4 * s, 2);
     ctx.fill();
-    roundRect(ctx, 1 * s, legTop + 5 * s, 4.5 * s, 9 * s, 2);
+    roundRect(ctx, 1 * s, legTop + 4.6 * s, 4.5 * s, 7.4 * s, 2);
+    ctx.fill();
+    ctx.fillStyle = '#3b2c22';
+    roundRect(ctx, -6 * s, legTop + 11.4 * s, 5.4 * s, 2.6 * s, 1.3);
+    ctx.fill();
+    roundRect(ctx, 0.6 * s, legTop + 11.4 * s, 5.4 * s, 2.6 * s, 1.3);
     ctx.fill();
   } else {
-    roundRect(ctx, -5.5 * s + stride * 2, legTop, 4.6 * s, 11 * s, 2.4);
-    ctx.fill();
+    // Trailing leg first so the leading one overlaps it.
+    ctx.fillStyle = pantsDark;
     roundRect(ctx, 0.9 * s - stride * 2, legTop, 4.6 * s, 11 * s, 2.4);
     ctx.fill();
-    ctx.fillStyle = shade(look.pants, 0.6);
-    roundRect(ctx, -6 * s + stride * 2, legTop + 10 * s, 5.6 * s, 3.2 * s, 1.6);
+    ctx.fillStyle = look.pants;
+    roundRect(ctx, -5.5 * s + stride * 2, legTop, 4.6 * s, 11 * s, 2.4);
     ctx.fill();
-    roundRect(ctx, 0.5 * s - stride * 2, legTop + 10 * s, 5.6 * s, 3.2 * s, 1.6);
-    ctx.fill();
+
+    // Shoes, with a darker sole so feet read against the floor.
+    for (const [x, near] of [
+      [0.5 * s - stride * 2, 0],
+      [-6 * s + stride * 2, 1],
+    ] as const) {
+      ctx.fillStyle = near ? '#4a382b' : '#3b2c22';
+      roundRect(ctx, x, legTop + 10 * s, 5.6 * s, 3.2 * s, 1.6);
+      ctx.fill();
+      ctx.fillStyle = 'rgba(20,14,10,0.45)';
+      roundRect(ctx, x, legTop + 12.4 * s, 5.6 * s, 0.9 * s, 0.45);
+      ctx.fill();
+    }
   }
 
-  // Torso — short and rounded, like a 2009 social-game figure.
+  // ------------------------------------------------------------------ torso
+  const armSwing = opts.walking ? stride * 3 : 0;
+
+  // Far arm, behind the body.
+  ctx.fillStyle = shirtDark;
+  if (opts.carrying) {
+    // The carrying arm is raised to hold the tray.
+    roundRect(ctx, 7.4 * s, bodyTop - 1 * s, 3.8 * s, 7.5 * s, 2);
+  } else {
+    roundRect(ctx, 7.4 * s, bodyTop + 2 * s + armSwing, 3.8 * s, 10 * s, 2);
+  }
+  ctx.fill();
+
   ctx.fillStyle = shirt;
   roundRect(ctx, -8.2 * s, bodyTop, 16.4 * s, 13 * s, 6);
   ctx.fill();
+
+  // Form shading down the shaded side and a soft highlight on the lit side.
+  ctx.fillStyle = shirtDark;
+  roundRect(ctx, 3.8 * s, bodyTop + 0.8 * s, 4.4 * s, 12 * s, 5);
+  ctx.fill();
+  ctx.fillStyle = shirtLit;
+  roundRect(ctx, -7.6 * s, bodyTop + 1.2 * s, 3.2 * s, 10.6 * s, 4);
+  ctx.fill();
+
+  // Collar and hem.
   ctx.fillStyle = trim;
   ctx.fillRect(-8.2 * s, bodyTop + 9.6 * s, 16.4 * s, 2.2 * s);
   if (!away) {
-    ctx.fillStyle = withAlpha(trim, 0.9);
+    ctx.fillStyle = withAlpha(trim, 0.92);
     ctx.beginPath();
     ctx.moveTo(-2.6 * s, bodyTop);
     ctx.lineTo(0, bodyTop + 5.2 * s);
@@ -642,67 +702,67 @@ export function drawPerson(
     ctx.fill();
   }
 
-  // Arms
-  ctx.fillStyle = shirt;
-  const armSwing = opts.walking ? stride * 3 : 0;
+  // Apron, for anyone in a uniform.
+  if (opts.uniform) {
+    ctx.fillStyle = 'rgba(252, 249, 241, 0.92)';
+    roundRect(ctx, -5.6 * s, bodyTop + 4.6 * s, 11.2 * s, 9.4 * s, 2);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(186, 172, 150, 0.8)';
+    ctx.lineWidth = 0.9 * s;
+    ctx.beginPath();
+    ctx.moveTo(-5.6 * s, bodyTop + 5.6 * s);
+    ctx.lineTo(5.6 * s, bodyTop + 5.6 * s);
+    ctx.stroke();
+  }
+
+  // Near arm, in front of the body.
+  ctx.fillStyle = shirtLit;
   roundRect(ctx, -11.2 * s, bodyTop + 2 * s - armSwing, 3.8 * s, 10 * s, 2);
   ctx.fill();
-  if (!opts.carrying) {
-    roundRect(ctx, 7.4 * s, bodyTop + 2 * s + armSwing, 3.8 * s, 10 * s, 2);
-    ctx.fill();
-  } else {
-    // Carrying arm is raised to hold the tray.
-    roundRect(ctx, 7.4 * s, bodyTop - 1 * s, 3.8 * s, 7.5 * s, 2);
-    ctx.fill();
-  }
+
+  // Hands.
   ctx.fillStyle = look.skin;
   ctx.beginPath();
   ctx.arc(-9.2 * s, bodyTop + 12 * s - armSwing, 2.5 * s, 0, Math.PI * 2);
   ctx.fill();
   if (!opts.carrying) {
+    ctx.fillStyle = skinShade;
     ctx.beginPath();
     ctx.arc(9.3 * s, bodyTop + 12 * s + armSwing, 2.5 * s, 0, Math.PI * 2);
     ctx.fill();
   }
 
-  // Head — oversized, original chibi (not a copy of any licensed character).
-  ctx.fillStyle = look.skin;
-  ctx.beginPath();
-  ctx.arc(0, headY, 10.6 * s, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = shade(look.skin, 0.92);
+  // ------------------------------------------------------------------- head
+  ctx.fillStyle = skinShade;
   ctx.beginPath();
   ctx.ellipse(0, headY + 8.8 * s, 4 * s, 2.2 * s, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  drawHair(ctx, look, headY, s, away);
+  ctx.fillStyle = look.skin;
+  ctx.beginPath();
+  ctx.arc(0, headY, headR, 0, Math.PI * 2);
+  ctx.fill();
 
-  if (!away) {
-    // Eyes
-    ctx.fillStyle = '#2b2118';
-    ctx.beginPath();
-    ctx.arc(-3.4 * s, headY - 0.4 * s, 1.7 * s, 0, Math.PI * 2);
-    ctx.arc(3.4 * s, headY - 0.4 * s, 1.7 * s, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#fff';
-    ctx.beginPath();
-    ctx.arc(-2.8 * s, headY - 1.0 * s, 0.65 * s, 0, Math.PI * 2);
-    ctx.arc(4.0 * s, headY - 1.0 * s, 0.65 * s, 0, Math.PI * 2);
-    ctx.fill();
-    // Rosy cheeks
-    ctx.fillStyle = withAlpha('#e87a7a', 0.42);
-    ctx.beginPath();
-    ctx.ellipse(-5.6 * s, headY + 3.4 * s, 2.5 * s, 1.5 * s, 0, 0, Math.PI * 2);
-    ctx.ellipse(5.6 * s, headY + 3.4 * s, 2.5 * s, 1.5 * s, 0, 0, Math.PI * 2);
-    ctx.fill();
-    // Smile
-    ctx.strokeStyle = 'rgba(80,40,30,0.8)';
-    ctx.lineWidth = 1.25 * s;
-    ctx.lineCap = 'round';
-    ctx.beginPath();
-    ctx.arc(0, headY + 2.6 * s, 3.2 * s, 0.18 * Math.PI, 0.82 * Math.PI);
-    ctx.stroke();
-  }
+  // Cheek shading on the away side, and ears.
+  ctx.fillStyle = withAlpha(skinShade, 0.75);
+  ctx.beginPath();
+  ctx.arc(3.4 * s, headY + 0.6 * s, headR * 0.72, -Math.PI * 0.45, Math.PI * 0.45);
+  ctx.fill();
+  ctx.fillStyle = skinShade;
+  ctx.beginPath();
+  ctx.ellipse(-headR * 0.96, headY + 0.8 * s, 1.5 * s, 2.1 * s, 0, 0, Math.PI * 2);
+  ctx.ellipse(headR * 0.96, headY + 0.8 * s, 1.5 * s, 2.1 * s, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Outline just the head, which is enough to lift the figure off the floor.
+  ctx.strokeStyle = ink;
+  ctx.lineWidth = 0.9 * s;
+  ctx.beginPath();
+  ctx.arc(0, headY, headR, 0, Math.PI * 2);
+  ctx.stroke();
+
+  drawHair(ctx, look, headY, s, away);
+  if (!away) drawFace(ctx, look, headY, s, opts.time);
 
   // Props
   if (opts.carrying) {
@@ -735,6 +795,167 @@ export function drawPerson(
     ctx.beginPath();
     ctx.ellipse(9 * s, bodyTop + 10 * s, 5 * s, 3 * s, 0, 0, Math.PI * 2);
     ctx.fill();
+  }
+
+  ctx.restore();
+}
+
+/** Grain lines across a table top, clipped to the surface. */
+function woodGrain(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  lift: number,
+  size: number,
+  colour: string,
+): void {
+  const y = cy - lift * TILE_Z;
+  ctx.save();
+  diamondPath(ctx, cx, y, size, size);
+  ctx.clip();
+  ctx.strokeStyle = colour;
+  ctx.lineWidth = 1;
+  // Lines run along the +x grid axis, which on screen slopes down to the right.
+  for (let i = -3; i <= 3; i++) {
+    const off = i * 5;
+    ctx.beginPath();
+    ctx.moveTo(cx - TILE_W * 0.5, y + off - TILE_H * 0.25);
+    ctx.lineTo(cx + TILE_W * 0.5, y + off + TILE_H * 0.25);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+/**
+ * Dressing on a laid table: a condiment pair and a posy, both set towards the
+ * back so the middle stays clear for the plates the kitchen sends out.
+ */
+function tableSetting(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  lift: number,
+  time: number,
+): void {
+  const y = cy - lift * TILE_Z;
+
+  // Salt and pepper.
+  for (const [dx, cap] of [
+    [8, '#f4efe3'],
+    [13, '#5d4a3a'],
+  ] as const) {
+    ctx.fillStyle = '#e9e2d2';
+    roundRect(ctx, cx + dx, y - 7, 3.2, 6.4, 1.2);
+    ctx.fill();
+    ctx.fillStyle = cap;
+    roundRect(ctx, cx + dx, y - 7, 3.2, 1.8, 1);
+    ctx.fill();
+  }
+
+  // A small vase with two blooms that drift in the draught.
+  const vx = cx - 12;
+  ctx.fillStyle = '#8fb6c9';
+  roundRect(ctx, vx - 2.4, y - 8, 4.8, 8, 1.6);
+  ctx.fill();
+  ctx.fillStyle = '#a8cbdb';
+  roundRect(ctx, vx - 2.4, y - 8, 4.8, 2.2, 1.2);
+  ctx.fill();
+  ctx.strokeStyle = '#4f8248';
+  ctx.lineWidth = 1;
+  for (const dir of [-1, 1]) {
+    const lean = dir * (2.4 + Math.sin(time * 1.1 + dir) * 0.5);
+    ctx.beginPath();
+    ctx.moveTo(vx, y - 8);
+    ctx.lineTo(vx + lean, y - 14);
+    ctx.stroke();
+    ctx.fillStyle = dir > 0 ? '#e2707f' : '#efc05c';
+    ctx.beginPath();
+    ctx.arc(vx + lean, y - 15, 2.1, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+/**
+ * Small deterministic variation so a crowd does not look cloned. Derived from
+ * the existing colours rather than a stored field, so saves need no migration.
+ */
+function wearsGlasses(look: Appearance): boolean {
+  return hashString(look.skin + look.hair + look.shirt) % 5 === 0;
+}
+
+/** Eyes, brows, blush and mouth. Only drawn when the face is towards the camera. */
+function drawFace(
+  ctx: CanvasRenderingContext2D,
+  look: Appearance,
+  headY: number,
+  s: number,
+  time: number,
+): void {
+  const eyeY = headY - 0.4 * s;
+  const dx = 3.6 * s;
+  // Each figure gets a different `time` offset, so blinks never synchronise.
+  const blinking = (time * 0.31) % 1 < 0.05;
+
+  ctx.save();
+  ctx.lineCap = 'round';
+
+  if (blinking) {
+    ctx.strokeStyle = '#3a2b21';
+    ctx.lineWidth = 1.2 * s;
+    ctx.beginPath();
+    ctx.moveTo(-dx - 1.9 * s, eyeY);
+    ctx.lineTo(-dx + 1.9 * s, eyeY);
+    ctx.moveTo(dx - 1.9 * s, eyeY);
+    ctx.lineTo(dx + 1.9 * s, eyeY);
+    ctx.stroke();
+  } else {
+    ctx.fillStyle = '#fbf7ef';
+    ctx.beginPath();
+    ctx.ellipse(-dx, eyeY, 2.3 * s, 2.5 * s, 0, 0, Math.PI * 2);
+    ctx.ellipse(dx, eyeY, 2.3 * s, 2.5 * s, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#2b2118';
+    ctx.beginPath();
+    ctx.arc(-dx + 0.3 * s, eyeY + 0.25 * s, 1.4 * s, 0, Math.PI * 2);
+    ctx.arc(dx + 0.3 * s, eyeY + 0.25 * s, 1.4 * s, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.92)';
+    ctx.beginPath();
+    ctx.arc(-dx - 0.45 * s, eyeY - 0.75 * s, 0.55 * s, 0, Math.PI * 2);
+    ctx.arc(dx - 0.45 * s, eyeY - 0.75 * s, 0.55 * s, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  ctx.strokeStyle = shade(look.hair, 0.7);
+  ctx.lineWidth = 1.15 * s;
+  ctx.beginPath();
+  ctx.moveTo(-dx - 2 * s, eyeY - 4.2 * s);
+  ctx.lineTo(-dx + 1.8 * s, eyeY - 4.8 * s);
+  ctx.moveTo(dx - 1.8 * s, eyeY - 4.8 * s);
+  ctx.lineTo(dx + 2 * s, eyeY - 4.2 * s);
+  ctx.stroke();
+
+  ctx.fillStyle = withAlpha('#e87a7a', 0.4);
+  ctx.beginPath();
+  ctx.ellipse(-5.8 * s, eyeY + 3.8 * s, 2.5 * s, 1.5 * s, 0, 0, Math.PI * 2);
+  ctx.ellipse(5.8 * s, eyeY + 3.8 * s, 2.5 * s, 1.5 * s, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.strokeStyle = 'rgba(80, 40, 30, 0.8)';
+  ctx.lineWidth = 1.25 * s;
+  ctx.beginPath();
+  ctx.arc(0, headY + 2.6 * s, 3.2 * s, 0.18 * Math.PI, 0.82 * Math.PI);
+  ctx.stroke();
+
+  if (wearsGlasses(look)) {
+    ctx.strokeStyle = 'rgba(58, 46, 38, 0.9)';
+    ctx.lineWidth = 0.9 * s;
+    ctx.beginPath();
+    ctx.arc(-dx, eyeY, 3.4 * s, 0, Math.PI * 2);
+    ctx.arc(dx, eyeY, 3.4 * s, 0, Math.PI * 2);
+    ctx.moveTo(-dx + 3.4 * s, eyeY);
+    ctx.lineTo(dx - 3.4 * s, eyeY);
+    ctx.stroke();
   }
 
   ctx.restore();

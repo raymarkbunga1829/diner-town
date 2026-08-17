@@ -8,7 +8,22 @@ import { footprint } from '../game/grid';
 import { timeOfDay } from '../game/progression';
 import type { Game } from '../game/state';
 import type { Customer, Placed, Staff } from '../game/types';
-import { diamondPath, mix, roundRect, shade, withAlpha } from './shapes';
+import {
+  drawFloorGlow,
+  drawFloorTile,
+  drawPavingTile,
+  drawPendantLamp,
+  drawPlanter,
+  drawSky,
+  drawWallCap,
+  drawWallPanel,
+  drawWindow,
+  skyPalette,
+  tileNoise,
+  type SkyPalette,
+  type WallStyle,
+} from './scenery';
+import { diamondPath, mix, roundRect, withAlpha } from './shapes';
 import { drawFurniture, drawPerson, drawPlatedDish, drawWallItem } from './sprites';
 
 /** Height of the two back walls, in tile-height units. */
@@ -16,9 +31,15 @@ const WALL_HEIGHT = 2.35;
 
 const FLOOR_A = '#f7e2b4';
 const FLOOR_B = '#edc98a';
-const WALL_NE = '#fff4dc';
-const WALL_NW = '#f3e2c0';
-const WAINSCOT = '#c44536';
+
+const WALL_STYLE: WallStyle = {
+  base: '#fff4dc',
+  wainscot: '#c44536',
+  trim: '#fff8ea',
+};
+
+/** Lamps hang on this spacing, in tiles, and are inset from the walls. */
+const LAMP_SPACING = 3;
 
 export interface BuildPreview {
   defId: string;
@@ -54,16 +75,19 @@ export class Renderer {
     const { ctx, camera } = this;
     this.grid.sync();
 
+    const dayT = timeOfDay(this.game.data.clock);
+    const sky = skyPalette(dayT);
+
     ctx.save();
     ctx.clearRect(0, 0, camera.viewW, camera.viewH);
-    this.drawBackdrop();
+    drawSky(ctx, camera.viewW, camera.viewH, sky, camera.x, dayT, this.darkness(dayT));
 
     ctx.save();
     camera.applyTo(ctx);
 
-    this.drawOutside();
-    this.drawFloor(opts);
-    this.drawWalls(opts.time);
+    this.drawOutside(opts.time);
+    this.drawFloor(opts, dayT);
+    this.drawWalls(opts.time, sky);
 
     const overlays: Drawable[] = [];
     const sorted: Drawable[] = [];
@@ -75,49 +99,66 @@ export class Renderer {
     for (const o of overlays.sort((a, b) => a.depth - b.depth)) o.draw();
 
     this.drawPreview(opts);
+    this.drawLamps(opts.time);
     this.drawFloaters();
     ctx.restore();
 
-    this.drawLighting();
+    this.drawLighting(dayT);
     ctx.restore();
   }
 
   // -------------------------------------------------------------- backdrop
 
-  private drawBackdrop(): void {
-    const { ctx, camera } = this;
-    const g = ctx.createLinearGradient(0, 0, 0, camera.viewH);
-    g.addColorStop(0, '#6eb8e0');
-    g.addColorStop(0.42, '#b7dff2');
-    g.addColorStop(0.72, '#ffe7b0');
-    g.addColorStop(1, '#f0c888');
-    ctx.fillStyle = g;
-    ctx.fillRect(0, 0, camera.viewW, camera.viewH);
+  /**
+   * How dark the world is, 0 in the middle of the day and 1 at night. Drives the
+   * lamps, their floor pools and the evening colour wash.
+   */
+  private darkness(dayT: number): number {
+    // Trading runs 9am to 11pm, so the room only needs to darken towards the end
+    // of the day; there is no dawn to account for.
+    if (dayT < 0.66) return 0;
+    return Math.min(1, (dayT - 0.66) / 0.26);
   }
 
-  /** Pavement and street outside the entrance. */
-  private drawOutside(): void {
+  /** Paving and street dressing outside the entrance. */
+  private drawOutside(time: number): void {
     const { ctx } = this;
     const size = this.grid.size;
     const doorX = this.grid.doorX;
 
-    for (let ty = -3; ty <= -1; ty++) {
-      for (let tx = -2; tx <= size + 1; tx++) {
-        if (this.grid.isFloor(tx, ty)) continue;
-        if (this.grid.isWallTile(tx, ty)) continue;
+    // Paving outside the door, drawn as a path rather than as a full-width apron.
+    // Because "outside" is north of the room it projects above the wall tops, and
+    // a plane spanning the whole frontage there reads as a roof; a narrow path
+    // that fades out at its edges reads as ground leading away from the door.
+    const reach = 3.4;
+    for (let ty = -4; ty <= -1; ty++) {
+      for (let tx = doorX - 3; tx <= doorX + 3; tx++) {
+        if (this.grid.isFloor(tx, ty) || this.grid.isWallTile(tx, ty)) continue;
+        const d = Math.hypot(tx + 0.5 - (doorX + 0.5), (ty + 0.5) * 1.15);
+        if (d > reach) continue;
         const c = this.tileCentre(tx, ty);
-        diamondPath(ctx, c.x, c.y, 1, 1);
-        ctx.fillStyle = (tx + ty) % 2 === 0 ? '#d8c4a0' : '#cbb28a';
-        ctx.fill();
+        ctx.save();
+        // Feather the last of the paving so it dissolves into the distance.
+        ctx.globalAlpha = Math.min(1, (reach - d) / 1.1);
+        drawPavingTile(ctx, c.x, c.y, tileNoise(tx, ty));
+        ctx.restore();
       }
     }
 
     // Entry mat leading to the door.
     for (const ty of [-2, -1]) {
       const c = this.tileCentre(doorX, ty);
-      diamondPath(ctx, c.x, c.y, 0.94, 0.94);
+      diamondPath(ctx, c.x, c.y, 0.92, 0.92);
       ctx.fillStyle = ty === -1 ? '#c73a2e' : '#9d261c';
       ctx.fill();
+    }
+
+    // Planters flanking the door.
+    for (const dx of [-2, 2]) {
+      const tx = doorX + dx;
+      if (tx < 0 || tx >= size) continue;
+      const c = this.tileCentre(tx, -1);
+      drawPlanter(ctx, c.x, c.y, time, tx * 7 + 3);
     }
   }
 
@@ -127,21 +168,38 @@ export class Renderer {
 
   // ----------------------------------------------------------------- floor
 
-  private drawFloor(opts: RenderOptions): void {
+  private drawFloor(opts: RenderOptions, dayT: number): void {
     const { ctx } = this;
     const size = this.grid.size;
 
     for (let ty = 0; ty < size; ty++) {
       for (let tx = 0; tx < size; tx++) {
         const c = this.tileCentre(tx, ty);
-        diamondPath(ctx, c.x, c.y, 1, 1);
-        ctx.fillStyle = (tx + ty) % 2 === 0 ? FLOOR_A : FLOOR_B;
-        ctx.fill();
+        const base = (tx + ty) % 2 === 0 ? FLOOR_A : FLOOR_B;
+        drawFloorTile(ctx, c.x, c.y, base, tileNoise(tx, ty));
         if (this.game.data.settings.showGrid || opts.buildMode) {
+          diamondPath(ctx, c.x, c.y, 1, 1);
           ctx.strokeStyle = 'rgba(168, 42, 32, 0.14)';
           ctx.lineWidth = 1;
           ctx.stroke();
         }
+      }
+    }
+
+    // Warm pools under the pendant lamps, laid on the floor before any props so
+    // that furniture and diners sit inside the light rather than under it.
+    const strength = 0.09 + this.darkness(dayT) * 0.26;
+    for (const [tx, ty] of this.lampTiles()) {
+      const c = this.tileCentre(tx, ty);
+      drawFloorGlow(ctx, c.x, c.y, 3.1, '#ffcf8a', strength);
+    }
+
+    // Daylight falling through each window onto the floor inside.
+    const day = 1 - this.darkness(dayT);
+    if (day > 0.15) {
+      for (const tx of this.windowTiles()) {
+        const c = this.tileCentre(tx, 0.4);
+        drawFloorGlow(ctx, c.x, c.y, 2.4, '#fff3d2', 0.13 * day);
       }
     }
 
@@ -176,23 +234,66 @@ export class Renderer {
 
   // ----------------------------------------------------------------- walls
 
-  private drawWalls(time: number): void {
+  /** Tiles on the north-east wall that carry a window rather than bare panelling. */
+  private windowTiles(): number[] {
+    const size = this.grid.size;
+    const doorX = this.grid.doorX;
+    const taken = new Set(
+      this.game.data.placed
+        .filter((p) => this.game.defOf(p)?.role === 'wallDecor' && p.ty === -1)
+        .map((p) => p.tx),
+    );
+    return [1, size - 2, Math.floor(size / 2)].filter(
+      (tx, i, all) =>
+        tx > 0 &&
+        tx < size - 1 &&
+        Math.abs(tx - doorX) > 1 &&
+        !taken.has(tx) &&
+        all.indexOf(tx) === i,
+    );
+  }
+
+  /** Floor tiles a pendant lamp hangs over. */
+  private lampTiles(): Array<[number, number]> {
+    const size = this.grid.size;
+    const out: Array<[number, number]> = [];
+    for (let ty = 1; ty <= size - 2; ty += LAMP_SPACING) {
+      for (let tx = 1; tx <= size - 2; tx += LAMP_SPACING) {
+        if (this.grid.isFloor(tx, ty)) out.push([tx, ty]);
+      }
+    }
+    return out;
+  }
+
+  private drawLamps(time: number): void {
+    for (const [tx, ty] of this.lampTiles()) {
+      const c = this.tileCentre(tx, ty);
+      drawPendantLamp(this.ctx, c.x, c.y, time, true);
+    }
+  }
+
+  private drawWalls(time: number, sky: SkyPalette): void {
     const { ctx } = this;
     const size = this.grid.size;
     const h = WALL_HEIGHT * TILE_Z;
+    const glass: readonly [string, string] = [sky.top, sky.mid];
 
     // North-west wall (tx === -1), facing down-right.
     for (let ty = 0; ty < size; ty++) {
       const a = tileToWorld(0, ty);
       const b = tileToWorld(0, ty + 1);
-      this.wallSegment(a, b, h, WALL_NW, 'nw');
+      drawWallPanel(ctx, a, b, h, WALL_STYLE, 'nw');
+      drawWallCap(ctx, a, b, h, WALL_STYLE, 'nw');
     }
     // North-east wall (ty === -1), facing down-left, with a gap for the door.
+    const windows = new Set(this.windowTiles());
     for (let tx = 0; tx < size; tx++) {
       if (tx === this.grid.doorX) continue;
       const a = tileToWorld(tx, 0);
       const b = tileToWorld(tx + 1, 0);
-      this.wallSegment(a, b, h, WALL_NE, 'ne');
+      drawWallPanel(ctx, a, b, h, WALL_STYLE, 'ne');
+      if (windows.has(tx)) drawWindow(ctx, a, b, h, glass, 'ne');
+      drawWallCap(ctx, a, b, h, WALL_STYLE, 'ne');
     }
 
     this.drawDoorFrame(h);
@@ -208,44 +309,6 @@ export class Renderer {
         drawWallItem(ctx, def, base.x, base.y, 'nw', time);
       }
     }
-  }
-
-  private wallSegment(
-    a: { x: number; y: number },
-    b: { x: number; y: number },
-    h: number,
-    color: string,
-    side: 'ne' | 'nw',
-  ): void {
-    const { ctx } = this;
-    ctx.fillStyle = color;
-    ctx.beginPath();
-    ctx.moveTo(a.x, a.y - h);
-    ctx.lineTo(b.x, b.y - h);
-    ctx.lineTo(b.x, b.y);
-    ctx.lineTo(a.x, a.y);
-    ctx.closePath();
-    ctx.fill();
-
-    // Wainscot panel along the bottom.
-    ctx.fillStyle = side === 'ne' ? WAINSCOT : shade(WAINSCOT, 0.85);
-    ctx.beginPath();
-    ctx.moveTo(a.x, a.y - h * 0.28);
-    ctx.lineTo(b.x, b.y - h * 0.28);
-    ctx.lineTo(b.x, b.y);
-    ctx.lineTo(a.x, a.y);
-    ctx.closePath();
-    ctx.fill();
-
-    // Top cap gives the wall a sense of thickness.
-    ctx.fillStyle = shade(color, 1.14);
-    ctx.beginPath();
-    ctx.moveTo(a.x, a.y - h);
-    ctx.lineTo(b.x, b.y - h);
-    ctx.lineTo(b.x + (side === 'ne' ? -6 : 6), b.y - h - 4);
-    ctx.lineTo(a.x + (side === 'ne' ? -6 : 6), a.y - h - 4);
-    ctx.closePath();
-    ctx.fill();
   }
 
   private drawDoorFrame(h: number): void {
@@ -688,9 +751,8 @@ export class Renderer {
   // -------------------------------------------------------------- lighting
 
   /** A single translucent wash sells the passage of the trading day. */
-  private drawLighting(): void {
+  private drawLighting(t: number): void {
     const { ctx, camera } = this;
-    const t = timeOfDay(this.game.data.clock);
     let tint = 'rgba(0,0,0,0)';
     if (t < 0.12) tint = withAlpha('#ffb168', 0.16 * (1 - t / 0.12));
     else if (t > 0.68) {

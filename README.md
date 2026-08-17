@@ -113,7 +113,21 @@ Two things it deliberately tolerates. Script-dispatched clicks are not a user
 activation gesture, so Chrome refuses to start the `AudioContext` and warns once
 per click; those warnings are counted separately and ignored. The offline reload
 is expected to fail its network requests, so request errors are not recorded
-during that phase.
+during that phase. Pointed at `localhost`, it also skips the HTTPS and offline
+assertions, since a dev server satisfies neither.
+
+For looking at the art rather than asserting on it, `tools/screenshot.mjs` writes
+a PNG of a running build:
+
+```bash
+node tools/screenshot.mjs http://localhost:5173/ shot.png 1440x900
+node tools/screenshot.mjs http://localhost:5173/ shot.png 390x844 --zoom=8
+node tools/screenshot.mjs http://localhost:5173/ shot.png --clock=320 --panel=shop
+```
+
+`--zoom` sends that many wheel notches to the canvas, `--clock` jumps the in-game
+clock so evening lighting can be reviewed without waiting out a day (dev builds
+only), and `--panel` opens a dock panel before the capture.
 
 ## How it is put together
 
