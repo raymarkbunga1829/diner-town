@@ -48,7 +48,15 @@ Other scripts:
 npm run build     # typecheck, then bundle to dist/
 npm run preview   # serve the production build
 npm run typecheck # tsc --noEmit
+npm run check     # headless sanity checks (see below)
 ```
+
+`npm run check` bundles `tools/checks.ts` with esbuild and runs it under Node. It
+covers the things that are easiest to get subtly wrong — the isometric
+round-trip, picking a wall panel from a screen position, pathfinding and the
+"don't let the player seal off the doorway" rule, the mastery curve — and then
+runs four in-game minutes of the real simulation headlessly to confirm customers
+are actually seated, fed and charged.
 
 ## Deploying
 
@@ -69,6 +77,7 @@ src/
   game/       Rules and state: data tables, grid, A* pathfinding, the simulation
   render/     Canvas drawing: shape primitives, procedural sprites, the scene renderer
   ui/         DOM layer: status bar, dock, sliding panels, modals, tutorial
+tools/        Headless checks run by `npm run check`
 ```
 
 A few decisions worth knowing about:

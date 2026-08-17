@@ -475,71 +475,75 @@ export function drawWallItem(
 ): void {
   const pal = def.palette;
   ctx.save();
-  // Local space: +x runs one tile along the wall, +y is one pixel downward.
-  const ax = wall === 'ne' ? TILE_W / 2 : -TILE_W / 2;
-  const ay = TILE_H / 2;
-  ctx.transform(ax, ay, 0, 1, originX, originY);
-  ctx.scale(1 / TILE_W, 1);
-  // Now local +x is a screen pixel along the wall direction.
+  /*
+   * Skew into the wall plane. Local +x is one screen pixel of horizontal travel
+   * along the wall, which in isometric also drops half a pixel; local +y is a
+   * plain screen pixel downward. The negative determinant on the north-west
+   * wall mirrors the artwork, which is exactly what that wall's facing needs.
+   */
+  const dir = wall === 'ne' ? 1 : -1;
+  ctx.transform(dir, 0.5, 0, 1, originX, originY);
 
-  const y = -42;
+  const y = -46;
   switch (def.shape) {
     case 'painting': {
       ctx.fillStyle = pal.base;
-      roundRect(ctx, -17, y, 34, 26, 2);
+      roundRect(ctx, -15, y, 30, 24, 2);
       ctx.fill();
       ctx.fillStyle = pal.top;
-      ctx.fillRect(-13, y + 4, 26, 18);
+      ctx.fillRect(-11.5, y + 3.5, 23, 17);
       ctx.fillStyle = pal.accent;
       ctx.beginPath();
-      ctx.moveTo(-13, y + 22);
-      ctx.lineTo(-3, y + 10);
-      ctx.lineTo(4, y + 17);
-      ctx.lineTo(13, y + 7);
-      ctx.lineTo(13, y + 22);
+      ctx.moveTo(-11.5, y + 20.5);
+      ctx.lineTo(-3, y + 9);
+      ctx.lineTo(3, y + 15);
+      ctx.lineTo(11.5, y + 6);
+      ctx.lineTo(11.5, y + 20.5);
       ctx.closePath();
       ctx.fill();
       break;
     }
     case 'clock': {
+      const cy = y + 13;
       ctx.fillStyle = pal.base;
       ctx.beginPath();
-      ctx.arc(0, y + 13, 14, 0, Math.PI * 2);
+      ctx.arc(0, cy, 13, 0, Math.PI * 2);
       ctx.fill();
       ctx.fillStyle = pal.top;
       ctx.beginPath();
-      ctx.arc(0, y + 13, 11, 0, Math.PI * 2);
+      ctx.arc(0, cy, 10.5, 0, Math.PI * 2);
       ctx.fill();
       ctx.strokeStyle = pal.accent;
       ctx.lineWidth = 1.6;
+      ctx.lineCap = 'round';
       const a = time * 0.5;
       ctx.beginPath();
-      ctx.moveTo(0, y + 13);
-      ctx.lineTo(Math.cos(a) * 7, y + 13 + Math.sin(a) * 7);
-      ctx.moveTo(0, y + 13);
-      ctx.lineTo(Math.cos(a * 12) * 4, y + 13 + Math.sin(a * 12) * 4);
+      ctx.moveTo(0, cy);
+      ctx.lineTo(Math.cos(a) * 6.5, cy + Math.sin(a) * 6.5);
+      ctx.moveTo(0, cy);
+      ctx.lineTo(Math.cos(a * 12) * 4, cy + Math.sin(a * 12) * 4);
       ctx.stroke();
       break;
     }
     case 'neonSign': {
       ctx.fillStyle = pal.base;
-      roundRect(ctx, -22, y, 44, 24, 4);
+      roundRect(ctx, -20, y, 40, 24, 4);
       ctx.fill();
       const glow = 0.65 + Math.sin(time * 3) * 0.35;
-      ctx.strokeStyle = withAlpha(pal.top, glow);
-      ctx.lineWidth = 3;
+      ctx.lineWidth = 2.6;
       ctx.lineCap = 'round';
+      ctx.strokeStyle = withAlpha(pal.top, glow);
       ctx.beginPath();
-      ctx.moveTo(-15, y + 17);
-      ctx.lineTo(-15, y + 7);
-      ctx.lineTo(-8, y + 17);
-      ctx.lineTo(-8, y + 7);
+      ctx.moveTo(-14, y + 18);
+      ctx.lineTo(-14, y + 6);
+      ctx.lineTo(-7, y + 18);
+      ctx.lineTo(-7, y + 6);
       ctx.stroke();
       ctx.strokeStyle = withAlpha(pal.accent, glow);
       ctx.beginPath();
-      ctx.arc(4, y + 12, 6, 0.4, Math.PI * 1.7);
-      ctx.moveTo(15, y + 6);
-      ctx.lineTo(15, y + 18);
+      ctx.arc(3, y + 12, 6, 0.4, Math.PI * 1.7);
+      ctx.moveTo(14, y + 6);
+      ctx.lineTo(14, y + 18);
       ctx.stroke();
       break;
     }
@@ -1069,22 +1073,30 @@ export function drawIngredientIcon(
   ctx.restore();
 }
 
-/** Small isometric preview used by shop cards. */
+/**
+ * Shop-card preview, fitted to the given box. Wall decor is much smaller than
+ * a piece of furniture, so it gets its own fit or it would swim in the card.
+ */
 export function drawFurniturePreview(
   ctx: CanvasRenderingContext2D,
   def: FurnitureDef,
   x: number,
   y: number,
-  size: number,
+  w: number,
+  h: number,
   time: number,
 ): void {
   ctx.save();
-  ctx.translate(x + size / 2, y + size * 0.72);
-  const scale = size / 90;
-  ctx.scale(scale, scale);
   if (def.role === 'wallDecor') {
+    ctx.translate(x + w / 2, y + h * 0.5);
+    const scale = Math.min(w / 54, h / 34);
+    ctx.scale(scale, scale);
+    // The item is authored 46..22 px above its wall anchor; offset to centre it.
     drawWallItem(ctx, def, 0, 34, 'ne', time);
   } else {
+    ctx.translate(x + w / 2, y + h * 0.78);
+    const scale = Math.min(w / 92, h / 80);
+    ctx.scale(scale, scale);
     drawFurniture(ctx, def, 0, 0, { time, active: def.role === 'stove' });
   }
   ctx.restore();

@@ -16,7 +16,7 @@ const PREVIEW_TIME = 0.42;
 
 export function furniturePreview(def: FurnitureDef, w = 150, h = 74): HTMLCanvasElement {
   const { canvas, ctx } = makeCanvas(w, h);
-  drawFurniturePreview(ctx, def, 0, -4, Math.min(w, h * 1.9), PREVIEW_TIME);
+  drawFurniturePreview(ctx, def, 0, 0, w, h, PREVIEW_TIME);
   return canvas;
 }
 

@@ -1,0 +1,197 @@
+/**
+ * Headless sanity checks for the parts of the game that are easy to get subtly
+ * wrong: the isometric projection, wall picking, pathfinding, mastery curves and
+ * the end-to-end service loop.
+ *
+ * Run with `npm run check`. Deliberately dependency-free — it bundles the real
+ * source with esbuild and asserts against it, rather than reimplementing logic.
+ */
+
+import { TILE_H, TILE_W, TILE_Z, tileToWorld, worldToTile } from '../src/engine/iso';
+import {
+  cumulativeServings,
+  dishLevelFromServings,
+  dishPrice,
+  DISHES_BY_ID,
+  MAX_DISH_LEVEL,
+} from '../src/game/data/dishes';
+import { FURNITURE_BY_ID } from '../src/game/data/furniture';
+import { Grid } from '../src/game/grid';
+import { findPath } from '../src/game/path';
+import { Simulation } from '../src/game/sim';
+import { createNewGame, Game } from '../src/game/state';
+
+let failures = 0;
+let checks = 0;
+
+function check(name: string, condition: boolean, detail = ''): void {
+  checks++;
+  if (condition) return;
+  failures++;
+  console.error(`  FAIL  ${name}${detail ? ` — ${detail}` : ''}`);
+}
+
+function group(name: string, run: () => void): void {
+  console.log(`\n${name}`);
+  run();
+}
+
+// ---------------------------------------------------------------- projection
+
+group('Isometric projection', () => {
+  for (const [tx, ty] of [[0, 0], [3, 7], [-2, 5], [15.5, 0.25]] as Array<[number, number]>) {
+    const w = tileToWorld(tx, ty);
+    const back = worldToTile(w.x, w.y);
+    check(
+      `round-trips (${tx}, ${ty})`,
+      Math.abs(back.tx - tx) < 1e-9 && Math.abs(back.ty - ty) < 1e-9,
+      `got (${back.tx}, ${back.ty})`,
+    );
+  }
+
+  // Height must not disturb the horizontal position of a tile.
+  const flat = tileToWorld(4, 4, 0);
+  const raised = tileToWorld(4, 4, 2);
+  check('height only moves vertically', flat.x === raised.x && raised.y === flat.y - 2 * TILE_Z);
+});
+
+// -------------------------------------------------------------- wall picking
+
+group('Wall picking', () => {
+  const game = new Game(createNewGame());
+  const grid = new Grid(game);
+  grid.sync();
+
+  /** Project a point `k` tiles up a wall segment and invert it like a click. */
+  const pickOnWall = (
+    wall: 'ne' | 'nw',
+    index: number,
+    along: number,
+    heightTiles: number,
+  ): [number, number] | null => {
+    const base =
+      wall === 'ne' ? tileToWorld(index + along, 0) : tileToWorld(0, index + along);
+    const screenY = base.y - heightTiles * TILE_Z;
+    const t = worldToTile(base.x, screenY);
+    return grid.resolveWallTarget(t.tx, t.ty);
+  };
+
+  for (const index of [0, 1, 3, 7]) {
+    if (index === grid.doorX) continue;
+    for (const height of [0.3, 1.0, 1.8, 2.2]) {
+      for (const along of [0.1, 0.5, 0.9]) {
+        const ne = pickOnWall('ne', index, along, height);
+        check(
+          `north-east wall ${index} at height ${height}`,
+          !!ne && ne[0] === index && ne[1] === -1,
+          `got ${JSON.stringify(ne)}`,
+        );
+        const nw = pickOnWall('nw', index, along, height);
+        check(
+          `north-west wall ${index} at height ${height}`,
+          !!nw && nw[0] === -1 && nw[1] === index,
+          `got ${JSON.stringify(nw)}`,
+        );
+      }
+    }
+  }
+
+  check('doorway gap is not a wall slot', pickOnWall('ne', grid.doorX, 0.5, 1.2) === null);
+  check('floor clicks are not wall clicks', grid.resolveWallTarget(3.5, 3.5) === null);
+});
+
+// -------------------------------------------------------------- grid & paths
+
+group('Grid and pathfinding', () => {
+  const game = new Game(createNewGame());
+  const grid = new Grid(game);
+  grid.sync();
+  const size = game.data.gridSize;
+
+  const path = findPath(grid, game.data.doorX, -2, [[size - 1, size - 1]]);
+  check('door reaches the far corner', path !== null && path.length > 0);
+
+  const chairs = game.placedWithRole('chair');
+  check('starter chairs exist', chairs.length === 4, `found ${chairs.length}`);
+  check('starter chairs are usable seats', chairs.every((c) => grid.isUsableSeat(c)));
+
+  const stove = game.placedWithRole('stove')[0]!;
+  check('the stove is reachable', grid.accessTiles(stove).length > 0);
+
+  // Walling the door off must be refused.
+  const table = FURNITURE_BY_ID.table_square!;
+  const doorX = game.data.doorX;
+  for (const [tx, ty] of [[doorX - 1, 0], [doorX + 1, 0]] as Array<[number, number]>) {
+    game.data.placed.push({ uid: game.nextUid(), defId: table.id, tx, ty, rot: 0 });
+  }
+  game.touch();
+  grid.sync();
+  check(
+    'sealing the entrance is rejected',
+    !grid.canPlace(table, doorX, 0, 0),
+    'placement that traps the doorway was allowed',
+  );
+});
+
+// -------------------------------------------------------------------- dishes
+
+group('Dish mastery', () => {
+  check('level 1 needs no servings', dishLevelFromServings(0) === 1);
+  let previous = -1;
+  for (let level = 1; level <= MAX_DISH_LEVEL; level++) {
+    const needed = cumulativeServings(level);
+    check(`level ${level} threshold increases`, needed > previous, `${needed} <= ${previous}`);
+    check(`level ${level} is reached at its threshold`, dishLevelFromServings(needed) >= level);
+    previous = needed;
+  }
+  check('mastery caps out', dishLevelFromServings(10_000_000) === MAX_DISH_LEVEL);
+
+  const burger = DISHES_BY_ID.house_burger!;
+  check(
+    'mastery raises the price',
+    dishPrice(burger, MAX_DISH_LEVEL) > dishPrice(burger, 1) * 1.9,
+  );
+});
+
+// ---------------------------------------------------------- end-to-end service
+
+group('Service loop', () => {
+  const game = new Game(createNewGame());
+  const sim = new Simulation(game);
+  const startingCoins = game.data.coins;
+
+  // Four in-game minutes at a fixed step.
+  const step = 1 / 20;
+  for (let i = 0; i < 20 * 240; i++) sim.update(step);
+
+  const stats = game.data.stats;
+  check('customers were served', stats.customersServed > 0, `served ${stats.customersServed}`);
+  check('dishes were cooked', stats.dishesCooked > 0, `cooked ${stats.dishesCooked}`);
+  check('the till went up', game.data.coins > startingCoins, `${startingCoins} -> ${game.data.coins}`);
+  check('ingredients were consumed', game.pantryCount('beef') < 22);
+  check('experience accrued', game.data.xp > 0);
+
+  const finite = (v: number): boolean => Number.isFinite(v);
+  check(
+    'no actor drifted to NaN',
+    game.customers.every((c) => finite(c.tx) && finite(c.ty)) &&
+      game.data.staff.every((s) => finite(s.tx) && finite(s.ty)),
+  );
+  check(
+    'staff stayed on the board',
+    game.data.staff.every((s) => s.tx > -4 && s.ty > -4 && s.tx < 20 && s.ty < 20),
+  );
+  check('no orphaned orders', game.orders.every((o) =>
+    game.customers.some((c) => c.id === o.customerId)));
+  check('tile constants are consistent', TILE_W === TILE_H * 2 && TILE_Z > 0);
+
+  console.log(
+    `  (served ${stats.customersServed}, lost ${stats.customersLost}, cooked ${stats.dishesCooked}, ` +
+      `coins ${startingCoins} -> ${game.data.coins}, rating ${game.rating.toFixed(2)})`,
+  );
+});
+
+console.log(
+  `\n${failures === 0 ? 'PASS' : 'FAIL'} — ${checks - failures}/${checks} checks passed.\n`,
+);
+process.exit(failures === 0 ? 0 : 1);
