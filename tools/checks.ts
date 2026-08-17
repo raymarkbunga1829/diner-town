@@ -118,6 +118,25 @@ group('Grid and pathfinding', () => {
   const stove = game.placedWithRole('stove')[0]!;
   check('the stove is reachable', grid.accessTiles(stove).length > 0);
 
+  // Rugs are a separate layer, so furniture must be placeable on top of them.
+  const rug = FURNITURE_BY_ID.rug_small!;
+  const stool = FURNITURE_BY_ID.chair_stool!;
+  let free: [number, number] | null = null;
+  for (let y = 0; y < size && !free; y++) {
+    for (let x = 0; x < size && !free; x++) {
+      if (!grid.solidAt(x, y) && !grid.flatAt(x, y)) free = [x, y];
+    }
+  }
+  check('the starter floor has room to spare', free !== null);
+  free = free ?? [size - 1, size - 1];
+  check('an empty tile accepts a rug', grid.canPlace(rug, free[0], free[1], 0));
+  game.data.placed.push({ uid: game.nextUid(), defId: rug.id, tx: free[0], ty: free[1], rot: 0 });
+  game.touch();
+  grid.sync();
+  check('furniture stacks on a rug', grid.canPlace(stool, free[0], free[1], 0));
+  check('a second rug does not stack', !grid.canPlace(rug, free[0], free[1], 0));
+  check('a rug does not block walking', grid.isWalkable(free[0], free[1]));
+
   // Walling the door off must be refused.
   const table = FURNITURE_BY_ID.table_square!;
   const doorX = game.data.doorX;

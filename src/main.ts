@@ -585,11 +585,32 @@ class App implements AppApi {
       }
     }
 
+    const open = this.game.data.open;
     return [
       el('span', { class: 'label', text: 'Tap an item to move or sell it' }),
       button('Shop', 'shop', 'primary', () => this.openSheet('shop')),
-      button('Exit build', 'check', 'ghost', () => this.exitBuild()),
+      button(
+        open ? 'Open' : 'Closed',
+        open ? 'play' : 'pause',
+        open ? 'green' : 'danger',
+        () => this.toggleOpen(),
+      ),
+      button('Exit', 'check', 'ghost', () => this.exitBuild()),
     ];
+  }
+
+  private toggleOpen(): void {
+    const open = !this.game.data.open;
+    this.game.data.open = open;
+    this.game.touch();
+    this.save();
+    audio.play('tap');
+    this.toast(
+      open ? 'Open again — guests are on their way' : 'Closed for remodelling',
+      'info',
+    );
+    this.updateBuildBar();
+    this.refresh();
   }
 
   // ------------------------------------------------------------- AppApi
@@ -623,6 +644,8 @@ class App implements AppApi {
     this.updateBuildBar();
   }
 
+  private hintedRemodel = false;
+
   enterBuild(): void {
     if (this.mode === 'build') {
       this.updateBuildBar();
@@ -630,6 +653,10 @@ class App implements AppApi {
     }
     this.mode = 'build';
     this.ui.showBuildBar(() => this.buildBarContents());
+    if (!this.hintedRemodel && this.game.data.open) {
+      this.hintedRemodel = true;
+      this.toast('Tip: tap Open to close up while you remodel', 'info');
+    }
   }
 
   exitBuild(): void {

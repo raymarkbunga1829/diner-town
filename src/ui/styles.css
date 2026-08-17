@@ -640,6 +640,8 @@ button {
   backdrop-filter: blur(10px);
   box-shadow: 0 8px 26px rgba(0, 0, 0, 0.45);
   align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
   max-width: calc(100vw - 16px);
 }
 
@@ -906,6 +908,13 @@ button {
     left: calc(12px + var(--safe-l));
     transform: none;
     bottom: calc(var(--dock-h) + 28px + var(--safe-b));
+  }
+}
+
+@media (max-width: 430px) {
+  /* The build bar needs every pixel for its buttons on a narrow phone. */
+  .buildbar .label {
+    display: none;
   }
 }
 
