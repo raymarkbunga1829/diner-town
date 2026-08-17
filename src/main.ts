@@ -727,6 +727,11 @@ function boot(): void {
   }
 
   registerServiceWorker();
+
+  if (import.meta.env.DEV) {
+    // Handle for poking at the running game from the dev console.
+    (window as unknown as { diner: { app: App; game: Game } }).diner = { app, game };
+  }
 }
 
 /** Cache the build so the game keeps working with no connection. */
