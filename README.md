@@ -58,6 +58,25 @@ round-trip, picking a wall panel from a screen position, pathfinding and the
 runs four in-game minutes of the real simulation headlessly to confirm customers
 are actually seated, fed and charged.
 
+## Publishing this to your own GitHub repo
+
+The project is already a git repository with its full history committed, so it
+only needs a remote. Create an empty repository on GitHub (no README, no
+`.gitignore` — this repo has both), then from the project directory:
+
+```bash
+git remote add origin https://github.com/<your-username>/diner-town.git
+git branch -M main
+git push -u origin main
+```
+
+Or, with the [GitHub CLI](https://cli.github.com) authenticated (`gh auth login`),
+one command does the whole thing:
+
+```bash
+gh repo create diner-town --public --source=. --remote=origin --push
+```
+
 ## Deploying
 
 The bundle in `dist/` is plain static files, so any static host works. A GitHub
