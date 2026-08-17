@@ -1,0 +1,18 @@
+{
+  "name": "diner-town",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "A restaurant management sim in the spirit of Playfish's Restaurant City. Runs in any modern browser on mobile and desktop.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0",
+    "vite": "^7.0.0"
+  }
+}

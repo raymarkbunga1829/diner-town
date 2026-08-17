@@ -1,0 +1,19 @@
+{
+  "name": "Diner Town",
+  "short_name": "Diner Town",
+  "description": "Build, staff and run your own restaurant.",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#2b1d16",
+  "theme_color": "#2b1d16",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

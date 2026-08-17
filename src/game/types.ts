@@ -1,0 +1,180 @@
+import type { IngredientId } from './data/ingredients';
+
+export type StaffRole = 'waiter' | 'chef' | 'cleaner';
+
+export interface Appearance {
+  skin: string;
+  hair: string;
+  hairStyle: 'short' | 'bun' | 'long' | 'cap' | 'bald' | 'curly';
+  shirt: string;
+  pants: string;
+  /** 0..1, scales overall body height slightly. */
+  build: number;
+}
+
+/** A placed piece of furniture. `tx`/`ty` is the top (smallest) tile of its footprint. */
+export interface Placed {
+  uid: number;
+  defId: string;
+  tx: number;
+  ty: number;
+  /** Rotation in 90-degree steps; affects rendering and footprint orientation. */
+  rot: 0 | 1 | 2 | 3;
+  /** Tables accumulate dirt after a customer leaves and must be cleaned. */
+  dirty?: boolean;
+  /** Plates resting on a counter or stove awaiting collection. */
+  plates?: number[];
+}
+
+export type CustomerState =
+  | 'entering'
+  | 'queueing'
+  | 'walkingToSeat'
+  | 'deciding'
+  | 'awaitingWaiter'
+  | 'ordering'
+  | 'awaitingFood'
+  | 'eating'
+  | 'leaving';
+
+export interface Customer {
+  id: number;
+  name: string;
+  look: Appearance;
+  state: CustomerState;
+  /** Current fractional tile position. */
+  tx: number;
+  ty: number;
+  path: Array<[number, number]>;
+  /** 0..1; empties as the customer waits and drives mood and tips. */
+  patience: number;
+  patienceDrainPerSec: number;
+  /** Chair uid the customer owns, if seated or heading to a seat. */
+  chairUid: number | null;
+  tableUid: number | null;
+  dishId: string | null;
+  orderId: number | null;
+  timer: number;
+  /** Recorded when the customer finishes, for the service rating. */
+  satisfaction: number;
+  angry: boolean;
+  /** Set while the customer is queueing, so queue slots stay stable. */
+  queueSlot: number;
+  spawnedAt: number;
+}
+
+export type OrderState = 'queued' | 'cooking' | 'ready' | 'collected';
+
+export interface Order {
+  id: number;
+  customerId: number;
+  dishId: string;
+  state: OrderState;
+  /** Stove currently cooking this order. */
+  stoveUid: number | null;
+  /** Where the finished plate is waiting (counter or stove uid). */
+  holdingUid: number | null;
+  /** 0..1 cooking progress. */
+  progress: number;
+  cookSeconds: number;
+  placedAt: number;
+}
+
+export type StaffState =
+  | 'idle'
+  | 'walking'
+  | 'takingOrder'
+  | 'toKitchen'
+  | 'cooking'
+  | 'carrying'
+  | 'serving'
+  | 'cleaning'
+  | 'exhausted';
+
+export interface Staff {
+  id: number;
+  name: string;
+  role: StaffRole;
+  look: Appearance;
+  /** Skill per discipline, 1..10. Only the one matching `role` is used at work. */
+  skills: Record<StaffRole, number>;
+  /** 0..100. Work drains it; at zero the member stops until fed or rested. */
+  energy: number;
+  /** Coins per in-game day. */
+  wage: number;
+  state: StaffState;
+  tx: number;
+  ty: number;
+  path: Array<[number, number]>;
+  timer: number;
+  /** What the member is currently working on. */
+  targetCustomerId: number | null;
+  targetOrderId: number | null;
+  targetUid: number | null;
+  /** Dish being carried, for rendering the tray. */
+  carryDishId: string | null;
+  hiredAt: number;
+}
+
+export interface Applicant {
+  id: number;
+  name: string;
+  look: Appearance;
+  skills: Record<StaffRole, number>;
+  wage: number;
+  fee: number;
+}
+
+export interface FloatingText {
+  id: number;
+  text: string;
+  tx: number;
+  ty: number;
+  life: number;
+  maxLife: number;
+  color: string;
+  kind: 'coin' | 'xp' | 'bad' | 'info';
+}
+
+export interface Stats {
+  totalEarned: number;
+  totalSpent: number;
+  customersServed: number;
+  customersLost: number;
+  dishesCooked: number;
+  daysOpen: number;
+}
+
+export interface Settings {
+  muted: boolean;
+  showGrid: boolean;
+  speed: 1 | 2 | 3;
+}
+
+export interface SaveData {
+  version: number;
+  createdAt: number;
+  savedAt: number;
+  restaurantName: string;
+  coins: number;
+  xp: number;
+  level: number;
+  gridSize: number;
+  doorX: number;
+  open: boolean;
+  /** Elapsed in-game seconds since the restaurant first opened. */
+  clock: number;
+  placed: Placed[];
+  staff: Staff[];
+  applicants: Applicant[];
+  pantry: Partial<Record<IngredientId, number>>;
+  marketStock: Partial<Record<IngredientId, number>>;
+  nextRestockAt: number;
+  menu: string[];
+  dishXp: Record<string, number>;
+  serviceScore: number;
+  stats: Stats;
+  settings: Settings;
+  tutorialStep: number;
+  seenIntro: boolean;
+}
