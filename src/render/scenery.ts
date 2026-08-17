@@ -3,13 +3,13 @@
  *
  * These are the pieces that make the diner feel like a place rather than a grid
  * of props — tiled flooring, panelled walls, hanging lamps that pool light on
- * the floor, windows, and the pavement and skyline beyond the door. Everything
- * is procedural and deterministic, so no assets are needed and a given tile
- * always looks the same.
+ * the floor, windows, and the streets, gardens and neighbouring shopfronts of
+ * the town it stands in. Everything is procedural and deterministic, so no
+ * assets are needed and a given tile always looks the same.
  */
 
 import { TILE_H, TILE_W, TILE_Z } from '../engine/iso';
-import { diamondPath, mix, roundRect, shade, withAlpha } from './shapes';
+import { diamondPath, faces, isoBox, mix, roundRect, shade, withAlpha } from './shapes';
 
 export interface Point {
   x: number;
@@ -313,7 +313,153 @@ export function drawPendantLamp(
   ctx.restore();
 }
 
-// -------------------------------------------------------------------- outside
+// ---------------------------------------------------------- the wider world
+
+/**
+ * The view looks down on the world at a fixed angle, so there is no horizon and
+ * no sky: ground runs to every edge of the screen. These are the colours it is
+ * built from.
+ */
+export const WORLD = {
+  plaza: '#e0cba8',
+  plazaJoint: '#bda484',
+  road: '#c9bda8',
+  grass: '#86b96a',
+  grassDark: '#5f9450',
+  trunk: '#8a6141',
+  leafA: '#5da356',
+  leafB: '#79bd66',
+} as const;
+
+/**
+ * One square of paving. Roadway is a shade cooler and darker than the squares it
+ * connects, so the street plan is legible from above.
+ */
+export function drawPlazaTile(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  n: number,
+  road = false,
+): void {
+  diamondPath(ctx, cx, cy, 1, 1);
+  ctx.fillStyle = tone(road ? WORLD.road : WORLD.plaza, 0.93 + n * 0.13);
+  ctx.fill();
+  ctx.strokeStyle = alpha(WORLD.plazaJoint, 0.4);
+  ctx.lineWidth = 1;
+  ctx.stroke();
+}
+
+/** A bed of lawn, drawn slightly proud of the paving that surrounds it. */
+export function drawLawnTile(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  n: number,
+): void {
+  diamondPath(ctx, cx, cy, 1, 1);
+  ctx.fillStyle = tone(WORLD.grassDark, 0.95);
+  ctx.fill();
+  diamondPath(ctx, cx, cy - TILE_Z * 0.05, 1, 1);
+  ctx.fillStyle = tone(WORLD.grass, 0.94 + n * 0.14);
+  ctx.fill();
+
+  // A clump of bedding flowers on some tiles, for colour at ground level.
+  if (n > 0.62) {
+    const petals = ['#f2617a', '#f7c548', '#f28e5a', '#d986d4'] as const;
+    const petal = petals[Math.floor(n * 997) % petals.length]!;
+    for (let i = 0; i < 5; i++) {
+      const a = n * 41 + i * 1.7;
+      const px = cx + Math.cos(a) * 13;
+      const py = cy - TILE_Z * 0.05 + Math.sin(a) * 6;
+      ctx.fillStyle = i % 2 === 0 ? petal : '#fff3d4';
+      ctx.beginPath();
+      ctx.arc(px, py, 1.9, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+}
+
+/** Street tree: trunk plus three overlapping crowns that drift in the breeze. */
+export function drawTree(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  time: number,
+  seed: number,
+): void {
+  const n = tileNoise(seed, seed * 7 + 1);
+  const scale = 0.85 + n * 0.4;
+  const sway = Math.sin(time * 0.5 + seed) * 1.6;
+
+  ctx.fillStyle = alpha('#000000', 0.22);
+  ctx.beginPath();
+  ctx.ellipse(cx + 3, cy + 1, 15 * scale, 7 * scale, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  const trunkH = 26 * scale;
+  ctx.fillStyle = WORLD.trunk;
+  roundRect(ctx, cx - 3 * scale, cy - trunkH, 6 * scale, trunkH, 2);
+  ctx.fill();
+  ctx.fillStyle = shade(WORLD.trunk, 1.2);
+  roundRect(ctx, cx - 3 * scale, cy - trunkH, 2.2 * scale, trunkH, 1.4);
+  ctx.fill();
+
+  const crownY = cy - trunkH - 8 * scale;
+  for (const [dx, dy, r, light] of [
+    [-9, 3, 11, 0],
+    [9, 2, 10, 0],
+    [0, -5, 13, 1],
+  ] as const) {
+    ctx.fillStyle = light ? WORLD.leafB : WORLD.leafA;
+    ctx.beginPath();
+    ctx.ellipse(
+      cx + dx * scale + sway,
+      crownY + dy * scale,
+      r * scale,
+      r * scale * 0.88,
+      0,
+      0,
+      Math.PI * 2,
+    );
+    ctx.fill();
+  }
+  // Sunlit top edge.
+  ctx.fillStyle = alpha('#ffffff', 0.18);
+  ctx.beginPath();
+  ctx.ellipse(cx - 3 * scale + sway, crownY - 9 * scale, 8 * scale, 4 * scale, 0, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+/**
+ * A neighbouring shopfront. These fill the streetscape around the restaurant so
+ * the player is looking at a town rather than at empty ground.
+ */
+export function drawShopBlock(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  span: number,
+  height: number,
+  seed: number,
+): void {
+  const walls = ['#e8a9a2', '#9fc4de', '#f0cf95', '#aed49b', '#c9aede', '#efb27f'] as const;
+  const wall = walls[Math.floor(tileNoise(seed, seed + 3) * walls.length) % walls.length]!;
+
+  ctx.fillStyle = 'rgba(40, 28, 22, 0.18)';
+  ctx.beginPath();
+  ctx.ellipse(cx + 4, cy + 3, TILE_W * span * 0.32, TILE_H * span * 0.32, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Upper storeys.
+  isoBox(ctx, cx, cy, span, span, height, faces(wall));
+  // A shorter box of glazing over the same footprint covers the lower part of the
+  // faces, and its top doubles as the canopy above the shopfront.
+  isoBox(ctx, cx, cy, span, span, 0.55, faces('#6d8496'));
+  isoBox(ctx, cx, cy, span * 1.1, span * 1.1, 0.1, faces(shade(wall, 0.82)), 0.55);
+  // Parapet.
+  isoBox(ctx, cx, cy, span * 1.08, span * 1.08, 0.13, faces(shade(wall, 0.8)), height);
+}
 
 const PAVING = '#8e8a80';
 
@@ -428,139 +574,6 @@ export function skyPalette(t: number): SkyPalette {
     far: mix(lo.p.far, hi.p.far, k),
     near: mix(lo.p.near, hi.p.near, k),
   };
-}
-
-/**
- * Sky, sun and a parallaxed city silhouette behind the restaurant, so the scene
- * sits in a world instead of floating on a flat fill. Drawn in screen space;
- * `panX` shifts the skyline a little as the camera moves.
- */
-export function drawSky(
-  ctx: CanvasRenderingContext2D,
-  w: number,
-  h: number,
-  palette: SkyPalette,
-  panX: number,
-  dayT: number,
-  night: number,
-): void {
-  const horizon = h * 0.54;
-
-  const g = ctx.createLinearGradient(0, 0, 0, horizon);
-  g.addColorStop(0, palette.top);
-  g.addColorStop(1, palette.mid);
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, w, horizon + 1);
-
-  // Sun or moon, tracking across the day.
-  const sunX = w * (0.12 + dayT * 0.76);
-  const sunY = horizon - Math.sin(dayT * Math.PI) * horizon * 0.62 - h * 0.02;
-  const sunR = Math.min(w, h) * 0.085;
-  const halo = ctx.createRadialGradient(sunX, sunY, 0, sunX, sunY, sunR * 3.6);
-  halo.addColorStop(0, alpha(palette.sun, 0.45));
-  halo.addColorStop(1, alpha(palette.sun, 0));
-  ctx.fillStyle = halo;
-  ctx.beginPath();
-  ctx.arc(sunX, sunY, sunR * 3.6, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = alpha(palette.sun, 0.8);
-  ctx.beginPath();
-  ctx.arc(sunX, sunY, sunR * 0.5, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Rooftops recede towards the sky colour, which reads as distance.
-  drawSkylineLayer(ctx, w, horizon, {
-    colour: mix(palette.far, palette.mid, 0.45),
-    scale: 0.05,
-    rise: h * 0.15,
-    step: 104,
-    seed: 11,
-    panX,
-    night: 0,
-  });
-
-  // Haze sitting on the horizon, separating the two layers.
-  const haze = ctx.createLinearGradient(0, horizon - h * 0.1, 0, horizon);
-  haze.addColorStop(0, alpha(palette.mid, 0));
-  haze.addColorStop(1, alpha(palette.mid, 0.55));
-  ctx.fillStyle = haze;
-  ctx.fillRect(0, horizon - h * 0.1, w, h * 0.1);
-
-  drawSkylineLayer(ctx, w, horizon, {
-    colour: mix(palette.near, palette.mid, 0.16),
-    scale: 0.11,
-    rise: h * 0.1,
-    step: 148,
-    seed: 29,
-    panX,
-    night,
-  });
-
-  // Ground beyond the restaurant, darkening towards the viewer. Drawn last so it
-  // covers the feet of the rooftops rather than letting them show as legs.
-  const ground = ctx.createLinearGradient(0, horizon, 0, h);
-  // Lighten towards the horizon so the ground recedes rather than reading as a
-  // flat slab butted up against the sky.
-  ground.addColorStop(0, mix(palette.ground, palette.mid, 0.4));
-  ground.addColorStop(1, shade(palette.ground, 0.72));
-  ctx.fillStyle = ground;
-  ctx.fillRect(0, horizon, w, h - horizon);
-}
-
-interface SkylineLayer {
-  colour: string;
-  /** How much of the camera pan this layer follows, for parallax. */
-  scale: number;
-  /** Maximum building height in pixels. */
-  rise: number;
-  step: number;
-  seed: number;
-  panX: number;
-  /** 0..1; above 0 some windows light up. */
-  night: number;
-}
-
-/** One band of rooftops standing on the horizon. */
-function drawSkylineLayer(
-  ctx: CanvasRenderingContext2D,
-  w: number,
-  horizon: number,
-  layer: SkylineLayer,
-): void {
-  const offset = -layer.panX * layer.scale;
-  const first = Math.floor((-240 - offset) / layer.step) - 1;
-  const last = Math.ceil((w + 240 - offset) / layer.step) + 1;
-
-  ctx.fillStyle = layer.colour;
-  ctx.beginPath();
-  ctx.moveTo(-240, horizon);
-  for (let i = first; i <= last; i++) {
-    const x = i * layer.step + offset;
-    const n = tileNoise(i, layer.seed);
-    const top = horizon - layer.rise * (0.25 + n);
-    ctx.lineTo(x, top);
-    ctx.lineTo(x + layer.step * 0.78, top);
-    ctx.lineTo(x + layer.step * 0.78, horizon);
-  }
-  ctx.lineTo(w + 240, horizon);
-  ctx.closePath();
-  ctx.fill();
-
-  if (layer.night <= 0.05) return;
-
-  // A scatter of lit windows once it is dark enough for them to show.
-  ctx.fillStyle = alpha('#ffd98a', 0.5 * layer.night);
-  for (let i = first; i <= last; i++) {
-    const x = i * layer.step + offset;
-    const n = tileNoise(i, layer.seed);
-    const top = horizon - layer.rise * (0.25 + n);
-    for (let row = 0; row < 4; row++) {
-      for (let col = 0; col < 3; col++) {
-        if (tileNoise(i * 31 + col, layer.seed + row * 7) < 0.55) continue;
-        ctx.fillRect(x + 10 + col * 22, top + 12 + row * 18, 7, 9);
-      }
-    }
-  }
 }
 
 // ----------------------------------------------------------------- primitives

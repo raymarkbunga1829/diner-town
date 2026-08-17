@@ -113,7 +113,7 @@ class App implements AppApi {
     // empty sky. Push in further there and let it bleed past the sides a little,
     // since panning is cheap and legible diners matter more.
     const portrait = this.camera.viewH > this.camera.viewW * 1.3;
-    const zoom = clamp(fit * (portrait ? 1.45 : 1.18), 0.62, 1.7);
+    const zoom = clamp(fit * (portrait ? 1.62 : 1.32), 0.62, 2);
     // The walls rise above the floor, so nudge the framing down to keep them in
     // shot. On a phone the dock eats the bottom of the screen instead, so there
     // the room wants lifting rather than dropping.

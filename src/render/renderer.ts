@@ -11,15 +11,19 @@ import type { Customer, Placed, Staff } from '../game/types';
 import {
   drawFloorGlow,
   drawFloorTile,
+  drawLawnTile,
   drawPavingTile,
   drawPendantLamp,
   drawPlanter,
-  drawSky,
+  drawPlazaTile,
+  drawShopBlock,
+  drawTree,
   drawWallCap,
   drawWallPanel,
   drawWindow,
   skyPalette,
   tileNoise,
+  WORLD,
   type SkyPalette,
   type WallStyle,
 } from './scenery';
@@ -29,8 +33,12 @@ import { drawFurniture, drawPerson, drawPlatedDish, drawWallItem } from './sprit
 /** Height of the two back walls, in tile-height units. */
 const WALL_HEIGHT = 2.35;
 
-const FLOOR_A = '#f7e2b4';
-const FLOOR_B = '#edc98a';
+/**
+ * Warm two-tone checker. The room reads as cream against the green streetscape
+ * outside, so the tiles stay buttery rather than competing for attention.
+ */
+const FLOOR_A = '#fbeccb';
+const FLOOR_B = '#eccb96';
 
 const WALL_STYLE: WallStyle = {
   base: '#fff4dc',
@@ -80,17 +88,23 @@ export class Renderer {
 
     ctx.save();
     ctx.clearRect(0, 0, camera.viewW, camera.viewH);
-    drawSky(ctx, camera.viewW, camera.viewH, sky, camera.x, dayT, this.darkness(dayT));
+    // Flat base coat so no pixel is ever left transparent, whatever the zoom.
+    ctx.fillStyle = WORLD.plaza;
+    ctx.fillRect(0, 0, camera.viewW, camera.viewH);
 
     ctx.save();
     camera.applyTo(ctx);
 
+    // No sky: the camera looks down on the world, so ground runs to every edge.
+    this.drawGround();
     this.drawOutside(opts.time);
+    this.drawBuildingBase();
     this.drawFloor(opts, dayT);
     this.drawWalls(opts.time, sky);
 
     const overlays: Drawable[] = [];
     const sorted: Drawable[] = [];
+    this.collectNeighbourhood(sorted, opts.time);
     this.collectFurniture(sorted, overlays, opts);
     this.collectActors(sorted, overlays, opts);
 
@@ -118,6 +132,232 @@ export class Renderer {
     // of the day; there is no dawn to account for.
     if (dayT < 0.66) return 0;
     return Math.min(1, (dayT - 0.66) / 0.26);
+  }
+
+  /** The range of tiles currently on screen, padded so nothing pops in at the edge. */
+  private visibleTiles(pad = 2): { minTx: number; maxTx: number; minTy: number; maxTy: number } {
+    const { camera } = this;
+    const corners = [
+      camera.screenToTile(0, 0),
+      camera.screenToTile(camera.viewW, 0),
+      camera.screenToTile(0, camera.viewH),
+      camera.screenToTile(camera.viewW, camera.viewH),
+    ];
+    let minTx = Infinity;
+    let maxTx = -Infinity;
+    let minTy = Infinity;
+    let maxTy = -Infinity;
+    for (const c of corners) {
+      minTx = Math.min(minTx, c.tx);
+      maxTx = Math.max(maxTx, c.tx);
+      minTy = Math.min(minTy, c.ty);
+      maxTy = Math.max(maxTy, c.ty);
+    }
+    return {
+      minTx: Math.floor(minTx) - pad,
+      maxTx: Math.ceil(maxTx) + pad,
+      minTy: Math.floor(minTy) - pad,
+      maxTy: Math.ceil(maxTy) + pad,
+    };
+  }
+
+  /** How far outside the building a tile is, in tiles. Zero means inside. */
+  private outsideBy(tx: number, ty: number): number {
+    const size = this.grid.size;
+    const dx = Math.max(-1 - tx, tx - size, 0);
+    const dy = Math.max(-1 - ty, ty - size, 0);
+    return Math.max(dx, dy);
+  }
+
+  /**
+   * The town is laid out on blocks of this many tiles, the outer ring of which is
+   * street. Structure beats noise here: streets and blocks read as a place,
+   * whereas randomly scattered greenery reads as a patchwork quilt.
+   */
+  private static readonly BLOCK = 6;
+  private static readonly STREET = 2;
+  /** Tiles this close to the restaurant stay clear paving, for the queue. */
+  private static readonly CLEARANCE = 2;
+
+  /** Where a tile falls in the town plan. */
+  private plotOf(tx: number, ty: number): {
+    street: boolean;
+    kind: 'lawn' | 'build' | 'square';
+    bx: number;
+    by: number;
+  } {
+    const { BLOCK, STREET } = Renderer;
+    const bx = Math.floor(tx / BLOCK);
+    const by = Math.floor(ty / BLOCK);
+    const ix = tx - bx * BLOCK;
+    const iy = ty - by * BLOCK;
+    const roll = tileNoise(bx * 31 + 11, by * 17 + 5);
+    return {
+      street: ix < STREET || iy < STREET,
+      kind: roll < 0.4 ? 'build' : roll < 0.85 ? 'lawn' : 'square',
+      bx,
+      by,
+    };
+  }
+
+  /** Streets, squares and planted blocks, stretching to every edge of the screen. */
+  private drawGround(): void {
+    const { ctx } = this;
+    const view = this.visibleTiles();
+
+    for (let ty = view.minTy; ty <= view.maxTy; ty++) {
+      for (let tx = view.minTx; tx <= view.maxTx; tx++) {
+        // Paved under the building too. The slab and floor cover it, and painting
+        // it anyway means the wall ring can never be left as a hole.
+        if (this.grid.isFloor(tx, ty)) continue;
+        const c = this.tileCentre(tx, ty);
+        const n = tileNoise(tx, ty);
+        const plot = this.plotOf(tx, ty);
+        const clear = this.outsideBy(tx, ty) < Renderer.CLEARANCE;
+        if (!plot.street && plot.kind === 'lawn' && !clear) {
+          drawLawnTile(ctx, c.x, c.y, n);
+        } else {
+          // Roadway reads a shade cooler than the squares it connects, which is
+          // what makes the town plan legible from above.
+          drawPlazaTile(ctx, c.x, c.y, n, plot.street && !clear);
+        }
+      }
+    }
+  }
+
+  /**
+   * Trees and neighbouring shopfronts, added to the depth-sorted pass so they
+   * occlude and are occluded by the restaurant correctly.
+   */
+  private collectNeighbourhood(out: Drawable[], time: number): void {
+    const { ctx } = this;
+    const { BLOCK, STREET } = Renderer;
+    const view = this.visibleTiles(BLOCK);
+    const doorX = this.grid.doorX;
+
+    // A building fills the interior of its block; trees dot the planted ones.
+    for (let by = Math.floor(view.minTy / BLOCK); by <= Math.floor(view.maxTy / BLOCK); by++) {
+      for (let bx = Math.floor(view.minTx / BLOCK); bx <= Math.floor(view.maxTx / BLOCK); bx++) {
+        const inner = BLOCK - STREET;
+        const x0 = bx * BLOCK + STREET;
+        const y0 = by * BLOCK + STREET;
+        const plot = this.plotOf(x0, y0);
+        const seed = bx * 137 + by * 29;
+
+        // A tile is free for planting if it clears the restaurant and its queue.
+        const free = (tx: number, ty: number): boolean =>
+          this.outsideBy(tx, ty) >= Renderer.CLEARANCE &&
+          !(Math.abs(tx - doorX) <= 1 && ty < 0);
+
+        // A building fills its whole block, so it needs the whole block clear.
+        // Blocks that cannot take one are planted with trees instead, which keeps
+        // the ground near the restaurant furnished rather than bare.
+        let roomForBlock = plot.kind === 'build';
+        for (let ty = y0; roomForBlock && ty < y0 + inner; ty++) {
+          for (let tx = x0; tx < x0 + inner; tx++) {
+            if (!free(tx, ty)) {
+              roomForBlock = false;
+              break;
+            }
+          }
+        }
+
+        if (roomForBlock) {
+          const span = inner - 1;
+          const height = 1.5 + tileNoise(seed, 9) * 2.2;
+          const cx = x0 + inner / 2;
+          const cy = y0 + inner / 2;
+          const c = tileToWorld(cx, cy);
+          out.push({
+            depth: depthOf(cx, cy, height),
+            draw: () => drawShopBlock(ctx, c.x, c.y, span, height, seed),
+          });
+        } else if (plot.kind !== 'square') {
+          for (let ty = y0; ty < y0 + inner; ty += 2) {
+            for (let tx = x0; tx < x0 + inner; tx += 2) {
+              if (!free(tx, ty)) continue;
+              if (tileNoise(tx * 13 + 5, ty * 29 + 7) < 0.34) continue;
+              const c = this.tileCentre(tx, ty);
+              const s = tx * 131 + ty;
+              out.push({
+                depth: depthOf(tx, ty, 1),
+                draw: () => drawTree(ctx, c.x, c.y, time, s),
+              });
+            }
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * The building sits on a raised slab. Seeing its thickness is what stops the
+   * room reading as a flat drawing pasted onto the ground.
+   */
+  private drawBuildingBase(): void {
+    const { ctx } = this;
+    const size = this.grid.size;
+    const lip = 0.4 * TILE_Z;
+
+    // Corners of the floor diamond, extended half a tile so the slab oversails.
+    const o = 0.35;
+    const north = tileToWorld(-o, -o);
+    const east = tileToWorld(size + o, -o);
+    const south = tileToWorld(size + o, size + o);
+    const west = tileToWorld(-o, size + o);
+
+    // The building's own shadow, thrown down and to the right because the light
+    // sits up and to the left. This is what stops the room looking like a drawing
+    // laid flat on the ground.
+    const sx = 26;
+    const sy = 15;
+    ctx.fillStyle = 'rgba(58, 40, 30, 0.2)';
+    ctx.beginPath();
+    ctx.moveTo(north.x + sx, north.y + sy);
+    ctx.lineTo(east.x + sx, east.y + sy);
+    ctx.lineTo(south.x + sx, south.y + lip + sy);
+    ctx.lineTo(west.x + sx, west.y + lip + sy);
+    ctx.closePath();
+    ctx.fill();
+
+    // Tighter contact shadow where the slab actually meets the ground.
+    ctx.fillStyle = 'rgba(40, 28, 22, 0.2)';
+    ctx.beginPath();
+    ctx.moveTo(north.x, north.y + 6);
+    ctx.lineTo(east.x + 8, east.y + 6);
+    ctx.lineTo(south.x, south.y + lip + 11);
+    ctx.lineTo(west.x - 8, west.y + 6);
+    ctx.closePath();
+    ctx.fill();
+
+    // The two side faces facing the camera.
+    ctx.fillStyle = '#a98a6a';
+    ctx.beginPath();
+    ctx.moveTo(west.x, west.y);
+    ctx.lineTo(south.x, south.y);
+    ctx.lineTo(south.x, south.y + lip);
+    ctx.lineTo(west.x, west.y + lip);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = '#c2a07c';
+    ctx.beginPath();
+    ctx.moveTo(south.x, south.y);
+    ctx.lineTo(east.x, east.y);
+    ctx.lineTo(east.x, east.y + lip);
+    ctx.lineTo(south.x, south.y + lip);
+    ctx.closePath();
+    ctx.fill();
+
+    // Top of the slab, which frames the floor as a skirt of stone.
+    ctx.fillStyle = '#dcc09a';
+    ctx.beginPath();
+    ctx.moveTo(north.x, north.y);
+    ctx.lineTo(east.x, east.y);
+    ctx.lineTo(south.x, south.y);
+    ctx.lineTo(west.x, west.y);
+    ctx.closePath();
+    ctx.fill();
   }
 
   /** Paving and street dressing outside the entrance. */
@@ -162,6 +402,39 @@ export class Renderer {
     }
   }
 
+  /**
+   * Soft shadow thrown onto the floor by one of the two back walls, fading out
+   * about a tile into the room.
+   */
+  private drawWallShadow(size: number, side: 'nw' | 'ne'): void {
+    const { ctx } = this;
+    const reach = side === 'nw' ? 1.05 : 0.8;
+    // The north-east wall faces the light, so it casts the shorter shadow.
+    const depth = side === 'nw' ? 0.34 : 0.24;
+
+    const at = (along: number, into: number) =>
+      side === 'nw' ? tileToWorld(into, along) : tileToWorld(along, into);
+
+    const near0 = at(0, 0);
+    const near1 = at(size, 0);
+    const far0 = at(0, reach);
+    const far1 = at(size, reach);
+
+    const g = ctx.createLinearGradient(near0.x, near0.y, far0.x, far0.y);
+    g.addColorStop(0, `rgba(88, 52, 34, ${depth})`);
+    g.addColorStop(0.5, `rgba(88, 52, 34, ${depth * 0.34})`);
+    g.addColorStop(1, 'rgba(88, 52, 34, 0)');
+
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.moveTo(near0.x, near0.y);
+    ctx.lineTo(near1.x, near1.y);
+    ctx.lineTo(far1.x, far1.y);
+    ctx.lineTo(far0.x, far0.y);
+    ctx.closePath();
+    ctx.fill();
+  }
+
   private tileCentre(tx: number, ty: number): { x: number; y: number } {
     return tileToWorld(tx + 0.5, ty + 0.5);
   }
@@ -185,6 +458,11 @@ export class Renderer {
         }
       }
     }
+
+    // The walls cast into the room. Seeing the floor darken as it meets them is
+    // what makes the two planes read as meeting at a right angle.
+    this.drawWallShadow(size, 'nw');
+    this.drawWallShadow(size, 'ne');
 
     // Warm pools under the pendant lamps, laid on the floor before any props so
     // that furniture and diners sit inside the light rather than under it.
