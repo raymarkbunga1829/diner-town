@@ -50,6 +50,7 @@ npm run preview   # serve the production build
 npm run typecheck # tsc --noEmit
 npm run check     # headless sanity checks (see below)
 npm run deploy    # build and publish to GitHub Pages without Actions
+npm run verify:live <url> [WIDTHxHEIGHT]   # smoke-test a deployed build
 ```
 
 `npm run check` bundles `tools/checks.ts` with esbuild and runs it under Node. It
@@ -94,6 +95,21 @@ or a private repository without minutes — `npm run deploy` publishes the same
 build without it. It builds with the right `BASE_PATH`, force-pushes `dist/` to a
 `gh-pages` branch, points Pages at that branch and asks it to rebuild. It needs
 an authenticated `gh` CLI and takes about a minute to go live.
+
+To confirm a deploy actually worked, `npm run verify:live <url>` drives headless
+Chrome over the DevTools Protocol against the real URL and fails loudly on
+anything wrong. It checks that the page is the deployed origin rather than a stray
+dev server, that the boot screen clears and the canvas paints, that every dock
+entry opens with real content, that a save reaches `localStorage`, that nothing
+overflows the viewport, and that the service worker still serves the game with the
+network switched off. Pass a viewport to test a phone: `npm run verify:live <url>
+390x844`.
+
+Two things it deliberately tolerates. Script-dispatched clicks are not a user
+activation gesture, so Chrome refuses to start the `AudioContext` and warns once
+per click; those warnings are counted separately and ignored. The offline reload
+is expected to fail its network requests, so request errors are not recorded
+during that phase.
 
 ## How it is put together
 
