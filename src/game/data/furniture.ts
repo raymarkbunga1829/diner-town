@@ -97,7 +97,7 @@ export const FURNITURE: readonly FurnitureDef[] = [
   {
     id: 'table_booth', name: 'Booth Table', role: 'table', shape: 'tableBooth',
     price: 1450, unlockLevel: 11, w: 1, h: 1, ambience: 14, tableCapacity: 4,
-    description: 'Padded booth seating built in. Very comfortable, very tippable.',
+    description: 'A padded table for four chairs (+14 Style). Still needs chairs around it; tips come from those chairs.',
     palette: P('#7d3b45', '#54242c', '#d8b98c', '#efe0c4'),
   },
 
@@ -156,7 +156,7 @@ export const FURNITURE: readonly FurnitureDef[] = [
   // ---------- Counters / support ----------
   {
     id: 'counter_wood', name: 'Pickup Counter', role: 'counter', shape: 'counterWood',
-    price: 220, unlockLevel: 2, w: 1, h: 1, ambience: 1, slots: 2,
+    price: 220, unlockLevel: 1, w: 1, h: 1, ambience: 1, slots: 2,
     description: 'Chefs park finished plates here so they can start the next order.',
     palette: P('#a9713a', '#7d5127', '#c98f52', '#f6ecd8'),
   },
@@ -181,7 +181,7 @@ export const FURNITURE: readonly FurnitureDef[] = [
   {
     id: 'bin_small', name: 'Trash Bin', role: 'bin', shape: 'binSmall',
     price: 80, unlockLevel: 1, w: 1, h: 1, ambience: -1,
-    description: 'Not pretty, but it keeps the floor from getting grubby.',
+    description: 'Takes −1 Style. Does not clean tables or the floor.',
     palette: P('#5f6a5f', '#3f473f', '#7f8c7f', '#2f352f'),
   },
 
@@ -207,13 +207,13 @@ export const FURNITURE: readonly FurnitureDef[] = [
   {
     id: 'jukebox', name: 'Jukebox', role: 'decor', shape: 'jukebox',
     price: 900, unlockLevel: 6, w: 1, h: 1, ambience: 16,
-    description: 'Music keeps waiting customers patient for longer.',
+    description: 'A flashy +16 Style piece. Does not change how fast guests lose patience.',
     palette: P('#8c2f3c', '#5c1c25', '#f2c14e', '#ffe9a8'),
   },
   {
     id: 'aquarium', name: 'Aquarium', role: 'decor', shape: 'aquarium',
     price: 1600, unlockLevel: 9, w: 1, h: 1, ambience: 24,
-    description: 'Mesmerising. Guests happily wait while they watch the fish.',
+    description: 'A +24 Style showpiece. Guests do not wait longer — it lifts the room rating.',
     palette: P('#3b4a5a', '#25303c', '#57b6d8', '#f0a24a'),
   },
   {

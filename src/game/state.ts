@@ -27,7 +27,7 @@ export const SAVE_VERSION = 1;
 /** Market restocks on this cadence (in-game seconds). */
 export const RESTOCK_INTERVAL = 90;
 
-export function createNewGame(restaurantName = 'The Copper Spoon'): SaveData {
+export function createNewGame(restaurantName = 'Diner Town'): SaveData {
   const now = Date.now();
   const r = new Rng(now);
 
@@ -37,8 +37,9 @@ export function createNewGame(restaurantName = 'The Copper Spoon'): SaveData {
     placed.push({ uid: uid++, defId, tx, ty, rot });
   };
 
-  // A small starter diner: one burner, two two-seat tables, and a little decor.
+  // A small starter diner: one burner, a pickup counter, two two-seat tables.
   put('stove_camp', 0, 1);
+  put('counter_wood', 0, 2);
   put('table_square', 2, 3);
   put('chair_stool', 2, 4);
   put('chair_stool', 3, 3);
@@ -71,9 +72,16 @@ export function createNewGame(restaurantName = 'The Copper Spoon'): SaveData {
       targetCustomerId: null, targetOrderId: null, targetUid: null,
       carryDishId: null, hiredAt: now,
     },
+    {
+      id: 3, name: 'Mina Kwan', role: 'cleaner', look: appearanceFrom('starter-cleaner'),
+      skills: { waiter: 1, chef: 1, cleaner: 3 }, energy: 100, wage: 58,
+      state: 'idle', tx: 2, ty: 1, path: [], timer: 0,
+      targetCustomerId: null, targetOrderId: null, targetUid: null,
+      carryDishId: null, hiredAt: now,
+    },
   ];
 
-  const applicants: Applicant[] = [3, 4, 5].map((id) => makeApplicant(id, 1, r));
+  const applicants: Applicant[] = [4, 5, 6].map((id) => makeApplicant(id, 1, r));
 
   return {
     version: SAVE_VERSION,
@@ -220,6 +228,11 @@ export class Game {
       if (this.pantryCount(id as IngredientId) < (qty ?? 0)) return false;
     }
     return true;
+  }
+
+  /** True when at least one menu dish has every ingredient in stock. */
+  menuCanCook(): boolean {
+    return this.data.menu.some((id) => this.canCook(id));
   }
 
   consumeIngredients(dishId: string): boolean {
@@ -446,7 +459,7 @@ export class Game {
 
 /** Fill in fields added after a save was written. */
 function migrate(data: SaveData): SaveData {
-  const fresh = createNewGame(data.restaurantName || 'The Copper Spoon');
+  const fresh = createNewGame(data.restaurantName || 'Diner Town');
   const merged: SaveData = { ...fresh, ...data };
   merged.settings = { ...fresh.settings, ...(data.settings ?? {}) };
   merged.stats = { ...fresh.stats, ...(data.stats ?? {}) };
