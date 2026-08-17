@@ -90,7 +90,11 @@ publishes the game.
 Because Pages serves projects from a subpath, the workflow passes the repository
 name through `BASE_PATH`. For any other host the default (`/`) is correct.
 
-If Actions is not available on the account — a disabled runner, a billing hold,
+After publishing, the workflow runs the deployed URL through a browser smoke test
+(see below) at both desktop and phone sizes, so a deploy that publishes but does
+not actually work still fails the run.
+
+If Actions is ever unavailable on the account — a disabled runner, a billing hold,
 or a private repository without minutes — `npm run deploy` publishes the same
 build without it. It builds with the right `BASE_PATH`, force-pushes `dist/` to a
 `gh-pages` branch, points Pages at that branch and asks it to rebuild. It needs

@@ -8,9 +8,30 @@
  */
 
 import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+
+/** Chrome lives in different places on developer machines and CI runners. */
+function findChrome() {
+  const candidates = [
+    process.env.CHROME_PATH,
+    '/opt/google/chrome/chrome',
+    '/usr/bin/google-chrome',
+    '/usr/bin/google-chrome-stable',
+    '/usr/bin/chromium',
+    '/usr/bin/chromium-browser',
+    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+  ].filter(Boolean);
+
+  const found = candidates.find((p) => existsSync(p));
+  if (!found) {
+    console.error(`Could not find Chrome. Tried:\n${candidates.map((c) => `  ${c}`).join('\n')}`);
+    console.error('Set CHROME_PATH to the binary to use.');
+    process.exit(2);
+  }
+  return found;
+}
 
 const URL_UNDER_TEST = process.argv[2];
 if (!URL_UNDER_TEST) {
@@ -27,7 +48,7 @@ const PORT = 9333;
 const profile = mkdtempSync(join(tmpdir(), 'verify-chrome-'));
 
 const chrome = spawn(
-  '/opt/google/chrome/chrome',
+  findChrome(),
   [
     '--headless=new',
     `--remote-debugging-port=${PORT}`,
@@ -156,6 +177,23 @@ await send('Emulation.setDeviceMetricsOverride', {
 });
 if (mobile) {
   await send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
+}
+
+// A fresh Pages deployment can take a moment to start serving, so wait for the
+// URL to answer before judging it.
+let ready = false;
+for (let i = 0; i < 60 && !ready; i++) {
+  try {
+    const res = await fetch(URL_UNDER_TEST, { redirect: 'follow' });
+    if (res.ok) ready = true;
+    else await sleep(2000);
+  } catch {
+    await sleep(2000);
+  }
+}
+if (!ready) {
+  console.error(`\nFAIL — ${URL_UNDER_TEST} never returned a successful response.`);
+  finish(1);
 }
 
 console.log(`Loading ${URL_UNDER_TEST} at ${width}x${height} (${mobile ? 'mobile' : 'desktop'}) ...`);

@@ -23,7 +23,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - run: npm ci
@@ -46,6 +46,29 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
+    outputs:
+      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
+
+  # Publishing successfully is not the same as working, so drive the real URL in a
+  # browser before calling the deploy good.
+  smoke:
+    needs: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # The verifier talks to Chrome over a WebSocket, which is only a global
+          # from Node 22 onwards.
+          node-version: 22
+
+      - name: Smoke-test the deployed site
+        env:
+          URL: ${{ needs.deploy.outputs.url }}
+        run: |
+          node tools/verify-live.mjs "$URL" 1440x900
+          node tools/verify-live.mjs "$URL" 390x844
