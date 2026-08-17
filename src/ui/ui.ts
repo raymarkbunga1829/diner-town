@@ -48,7 +48,16 @@ export class UI {
 
   private panels = new Map<PanelId, Panel>();
   private openPanel: PanelId | null = null;
-  private cache = { coins: -1, level: -1, xp: -1, rating: -1, clock: '', open: true };
+  private cache = {
+    coins: -1,
+    level: -1,
+    xp: -1,
+    rating: -1,
+    clock: '',
+    open: true,
+    marketBadge: false,
+    staffBadge: false,
+  };
 
   constructor(root: HTMLElement, private readonly game: Game) {
     this.root = root;
@@ -188,6 +197,28 @@ export class UI {
 
     for (const btn of Array.from(this.dock.children) as HTMLElement[]) {
       btn.classList.toggle('active', btn.dataset.id === this.openPanel);
+    }
+
+    const marketCrisis = this.game.data.menu.length > 0 && !this.game.menuCanCook();
+    const staffCrisis = this.game.data.staff.some((s) => s.state === 'exhausted');
+    if (marketCrisis !== this.cache.marketBadge) {
+      this.cache.marketBadge = marketCrisis;
+      this.setDockBadge('market', marketCrisis);
+    }
+    if (staffCrisis !== this.cache.staffBadge) {
+      this.cache.staffBadge = staffCrisis;
+      this.setDockBadge('staff', staffCrisis);
+    }
+  }
+
+  private setDockBadge(id: string, on: boolean): void {
+    const btn = this.dock.querySelector(`[data-id="${id}"]`) as HTMLElement | null;
+    if (!btn) return;
+    let badge = btn.querySelector('.badge');
+    if (on && !badge) {
+      btn.append(el('span', { class: 'badge', text: '!' }));
+    } else if (!on && badge) {
+      badge.remove();
     }
   }
 

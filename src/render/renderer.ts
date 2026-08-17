@@ -279,18 +279,57 @@ export class Renderer {
     ctx.closePath();
     ctx.fill();
 
-    // "OPEN"/"CLOSED" plaque above the door.
     const midX = (a.x + b.x) / 2;
     const midY = (a.y + b.y) / 2 - h - 6;
-    const open = this.game.data.open;
-    ctx.fillStyle = open ? '#2f9d5c' : '#c73a2e';
-    roundRect(ctx, midX - 22, midY - 12, 44, 15, 4);
-    ctx.fill();
-    ctx.fillStyle = '#fff8ea';
-    ctx.font = '700 9px Fredoka, Nunito, system-ui, sans-serif';
+    this.drawDoorSign(midX, midY);
+  }
+
+  /** Hanging board with the restaurant name, plus the OPEN/CLOSED plaque. */
+  private drawDoorSign(midX: number, midY: number): void {
+    const { ctx } = this;
+    const raw = (this.game.data.restaurantName || 'Diner Town').trim() || 'Diner Town';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(open ? 'OPEN' : 'CLOSED', midX, midY - 4);
+    ctx.font = '700 8px Fredoka, Nunito, system-ui, sans-serif';
+    let label = raw;
+    const maxW = 76;
+    if (ctx.measureText(label).width > maxW) {
+      ctx.font = '700 7px Fredoka, Nunito, system-ui, sans-serif';
+    }
+    if (ctx.measureText(label).width > maxW) {
+      while (label.length > 2 && ctx.measureText(`${label}…`).width > maxW) {
+        label = label.slice(0, -1);
+      }
+      label = `${label}…`;
+    }
+    const bw = Math.max(50, ctx.measureText(label).width + 12);
+    const signY = midY - 20;
+
+    ctx.strokeStyle = '#8a2a20';
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.moveTo(midX - bw / 2 + 7, signY - 8);
+    ctx.lineTo(midX - bw / 2 + 7, signY - 13);
+    ctx.moveTo(midX + bw / 2 - 7, signY - 8);
+    ctx.lineTo(midX + bw / 2 - 7, signY - 13);
+    ctx.stroke();
+
+    ctx.fillStyle = '#fff6e4';
+    roundRect(ctx, midX - bw / 2, signY - 8, bw, 16, 3);
+    ctx.fill();
+    ctx.strokeStyle = '#c73a2e';
+    ctx.lineWidth = 1.6;
+    ctx.stroke();
+    ctx.fillStyle = '#8a2a20';
+    ctx.fillText(label, midX, signY);
+
+    const open = this.game.data.open;
+    ctx.fillStyle = open ? '#2f9d5c' : '#c73a2e';
+    roundRect(ctx, midX - 22, midY - 8, 44, 13, 3);
+    ctx.fill();
+    ctx.fillStyle = '#fff8ea';
+    ctx.font = '700 8px Fredoka, Nunito, system-ui, sans-serif';
+    ctx.fillText(open ? 'OPEN' : 'CLOSED', midX, midY - 1);
   }
 
   // ------------------------------------------------------------- furniture

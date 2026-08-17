@@ -20,6 +20,7 @@ import { Grid } from '../src/game/grid';
 import { findPath } from '../src/game/path';
 import { Simulation } from '../src/game/sim';
 import { createNewGame, Game } from '../src/game/state';
+import { COACH_STEPS } from '../src/ui/tutorial';
 
 let failures = 0;
 let checks = 0;
@@ -150,6 +151,115 @@ group('Grid and pathfinding', () => {
     !grid.canPlace(table, doorX, 0, 0),
     'placement that traps the doorway was allowed',
   );
+});
+
+// ---------------------------------------------------------- starter loadout
+
+group('Starter loadout', () => {
+  const game = new Game(createNewGame());
+  const grid = new Grid(game);
+  grid.sync();
+
+  check('default name is Diner Town', game.data.restaurantName === 'Diner Town');
+
+  const counters = game.placedWithRole('counter');
+  check('starter has a pickup counter', counters.length === 1, `found ${counters.length}`);
+  check('starter counter is wooden', counters[0]?.defId === 'counter_wood');
+
+  const stove = game.placedWithRole('stove')[0];
+  const counter = counters[0];
+  const nextToStove =
+    !!stove &&
+    !!counter &&
+    Math.abs(stove.tx - counter.tx) + Math.abs(stove.ty - counter.ty) === 1;
+  check('counter sits next to the stove', nextToStove, `stove ${stove?.tx},${stove?.ty} counter ${counter?.tx},${counter?.ty}`);
+
+  check('starter has a waiter', game.staffByRole('waiter').length === 1);
+  check('starter has a chef', game.staffByRole('chef').length === 1);
+  check('starter has a cleaner', game.staffByRole('cleaner').length === 1, `roles ${game.data.staff.map((s) => s.role).join(',')}`);
+  check('level 1 staff capacity fits the trio', game.staffCapacity >= 3, `cap ${game.staffCapacity}`);
+  check('wooden counter is unlocked at level 1', FURNITURE_BY_ID.counter_wood?.unlockLevel === 1);
+
+  const size = game.data.gridSize;
+  const path = findPath(grid, game.data.doorX, -2, [[size - 1, size - 1]]);
+  check('door still reaches the far corner with the new kit', path !== null && path.length > 0);
+  check(
+    'door tile is empty and walkable',
+    !grid.solidAt(game.data.doorX, 0) && grid.isWalkable(game.data.doorX, 0),
+  );
+
+  // Flood-fill still refuses a full seal even with the extra counter.
+  const table = FURNITURE_BY_ID.table_square!;
+  const doorX = game.data.doorX;
+  for (const [tx, ty] of [[doorX - 1, 0], [doorX + 1, 0]] as Array<[number, number]>) {
+    if (!grid.solidAt(tx, ty)) {
+      game.data.placed.push({ uid: game.nextUid(), defId: table.id, tx, ty, rot: 0 });
+    }
+  }
+  game.touch();
+  grid.sync();
+  check(
+    'sealing the entrance is still rejected',
+    !grid.canPlace(table, doorX, 0, 0),
+    'placement that traps the doorway was allowed',
+  );
+});
+
+group('Starter cleaner wipes without buying', () => {
+  const game = new Game(createNewGame());
+  game.data.open = false;
+  const sim = new Simulation(game);
+  const table = game.placedWithRole('table')[0]!;
+  table.dirty = true;
+  const coins = game.data.coins;
+  const staffCount = game.data.staff.length;
+  const placedCount = game.data.placed.length;
+
+  const step = 1 / 20;
+  for (let i = 0; i < 20 * 20; i++) sim.update(step);
+
+  check('starter cleaner wiped the dirty table', !table.dirty);
+  check('no furniture was bought', game.data.placed.length === placedCount);
+  check('no staff were hired', game.data.staff.length === staffCount);
+  check('the till was not spent', game.data.coins === coins, `${coins} -> ${game.data.coins}`);
+});
+
+// ---------------------------------------------------------- shop honesty
+
+group('Shop copy matches the sim', () => {
+  const booth = FURNITURE_BY_ID.table_booth!;
+  check('booth is a table, not a chair', booth.role === 'table' && !booth.seats);
+  check('booth still needs chairs', (booth.tableCapacity ?? 0) > 0);
+  check('booth copy mentions chairs', /chairs/i.test(booth.description));
+  check('booth copy does not claim built-in seating', !/built in/i.test(booth.description));
+
+  const bin = FURNITURE_BY_ID.bin_small!;
+  check('bin is ambience only', bin.ambience === -1 && !bin.speed);
+  check('bin copy does not claim it cleans', !/grubby|keeps the floor/i.test(bin.description));
+  check('bin copy names the style hit', /−1 Style|-1 Style/i.test(bin.description));
+
+  const jukebox = FURNITURE_BY_ID.jukebox!;
+  check('jukebox is decor', jukebox.role === 'decor' && jukebox.ambience === 16);
+  check('jukebox copy names +16 Style', /\+16 Style/.test(jukebox.description));
+  check('jukebox copy does not claim patience', !/patient for longer|keep.*patient/i.test(jukebox.description));
+
+  const aquarium = FURNITURE_BY_ID.aquarium!;
+  check('aquarium is decor', aquarium.role === 'decor' && aquarium.ambience === 24);
+  check('aquarium copy names +24 Style', /\+24 Style/.test(aquarium.description));
+  check('aquarium copy does not claim longer waits', !/happily wait|wait while/i.test(aquarium.description));
+});
+
+// ---------------------------------------------------------- coach order
+
+group('Tutorial order', () => {
+  const html = COACH_STEPS.map((s) => s.html);
+  check('welcome leads with a clean seat', /clean seat/i.test(html[0] ?? ''));
+  check('counter is step 2', /pickup counter/i.test(html[1] ?? ''));
+  check('cleaner is step 3', /cleaner/i.test(html[2] ?? ''));
+  check('extra seats come after the cleaner', /More seats/i.test(html[3] ?? ''));
+  check('Show me can place a missing counter', COACH_STEPS[1]?.placeIfMissing === 'counter_wood');
+  check('counter step focuses the counter', typeof COACH_STEPS[1]?.focus === 'function');
+  check('cleaner step focuses the cleaner', typeof COACH_STEPS[2]?.focus === 'function');
 });
 
 // -------------------------------------------------------------------- dishes

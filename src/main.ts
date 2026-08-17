@@ -156,6 +156,7 @@ class App implements AppApi {
     this.ui.updateStatus();
     this.checkLevelUp();
     this.checkCoach();
+    this.checkPantryCrisis();
 
     this.saveTimer += dt;
     if (this.saveTimer >= AUTOSAVE_SECONDS) {
@@ -198,7 +199,14 @@ class App implements AppApi {
     }
     const step = COACH_STEPS[index]!;
     this.ui.showCoach(step.html, step.cta ?? null, () => {
-      this.seen.add(index === 0 ? 'intro' : 'outro');
+      const mark = step.mark ?? (index === 0 ? 'intro' : 'outro');
+      this.seen.add(mark);
+      const at = step.focus?.(this.game);
+      if (at) this.focusTile(at.tx, at.ty);
+      if (step.placeIfMissing && this.game.placedWithRole('counter').length === 0) {
+        this.startPlacing(step.placeIfMissing);
+        return;
+      }
       this.advanceCoach();
     });
   }
@@ -218,6 +226,20 @@ class App implements AppApi {
     const index = this.game.data.tutorialStep;
     if (index >= COACH_STEPS.length) return;
     if (COACH_STEPS[index]!.done(this.game, this.seen)) this.advanceCoach();
+  }
+
+  private pantryCrisisToasted = false;
+
+  /** One toast the first time no menu dish can be cooked. Does not spam. */
+  private checkPantryCrisis(): void {
+    if (this.game.data.menu.length === 0) return;
+    if (this.game.menuCanCook()) {
+      this.pantryCrisisToasted = false;
+      return;
+    }
+    if (this.pantryCrisisToasted) return;
+    this.pantryCrisisToasted = true;
+    this.toast('The pantry is empty — nothing on the menu can be cooked', 'bad');
   }
 
   // --------------------------------------------------------------- input

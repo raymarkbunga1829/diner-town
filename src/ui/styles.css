@@ -383,7 +383,9 @@ button:not(:disabled),
 
 .dock-btn .badge {
   position: absolute;
-  transform: translate(20px, -6px);
+  top: 3px;
+  right: 4px;
+  transform: none;
   background: var(--red);
   color: #fff;
   border-radius: 999px;
@@ -394,6 +396,7 @@ button:not(:disabled),
   line-height: 16px;
   text-align: center;
   border: 2px solid #fff;
+  pointer-events: none;
 }
 
 /* ---------------------------------------------------------------- sheets */
