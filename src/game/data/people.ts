@@ -27,19 +27,19 @@ export const HAIR_COLORS: readonly string[] = [
 ];
 
 export const SHIRT_COLORS: readonly string[] = [
-  '#d8613c', '#3f7fa8', '#6f9a4f', '#b1495f', '#8a6bb1', '#c9973c', '#3f8f83',
-  '#5a6b8c', '#a0523f', '#4f6b4a', '#b5566f', '#7e8fa8',
+  '#e85a3c', '#3d9ad6', '#5fbf55', '#e85a86', '#7b6ad6', '#f2b429', '#2fbaa8',
+  '#5aa0d8', '#d96a3a', '#68b86a', '#ef6b8a', '#6aa3c8',
 ];
 
 export const PANTS_COLORS: readonly string[] = [
-  '#3a4150', '#4a3b30', '#2f3a44', '#54484f', '#3d4a3a', '#5b4a3a',
+  '#3a4a62', '#5a4034', '#2f4656', '#5a4554', '#3d5240', '#5c4636',
 ];
 
 /** Uniform colours by staff role, so roles are readable at a glance. */
 export const UNIFORM: Record<'waiter' | 'chef' | 'cleaner', { shirt: string; trim: string }> = {
-  waiter: { shirt: '#f4efe4', trim: '#2f3540' },
-  chef: { shirt: '#fbfaf6', trim: '#c94f3a' },
-  cleaner: { shirt: '#8fb7d8', trim: '#37556b' },
+  waiter: { shirt: '#fff6e4', trim: '#c73a2e' },
+  chef: { shirt: '#fffdf8', trim: '#c73a2e' },
+  cleaner: { shirt: '#7ed0c4', trim: '#2a6f68' },
 };
 
 export type HairStyle = 'short' | 'bun' | 'long' | 'cap' | 'bald' | 'curly';

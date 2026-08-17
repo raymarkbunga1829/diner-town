@@ -81,6 +81,10 @@ export class UI {
     });
 
     this.topbar.append(
+      el('div', { class: 'pill brand-pill' }, [
+        el('span', { class: 'mark', text: 'D' }),
+        el('span', { text: 'Diner Town' }),
+      ]),
       this.coinsEl,
       this.levelEl,
       this.ratingEl,
@@ -145,7 +149,7 @@ export class UI {
     const d = this.game.data;
     if (this.cache.coins !== d.coins) {
       this.cache.coins = d.coins;
-      this.coinsEl.innerHTML = `${iconSvg('coin', 16, '#ffd76a')}<span>${fmtShort(d.coins)}</span>`;
+      this.coinsEl.innerHTML = `${iconSvg('coin', 16, '#e89a12')}<span>${fmtShort(d.coins)}</span>`;
     }
 
     const prog = levelProgress(d.xp);
@@ -399,7 +403,7 @@ export class UI {
         })
       : null;
     this.coach = el('div', { class: 'coach' }, [
-      el('span', { class: 'chef', html: iconSvg('info', 24, '#f7c85a') }),
+      el('span', { class: 'chef', html: iconSvg('info', 24, '#c73a2e') }),
       el('div', { class: 'txt', html }),
       btn,
     ]);

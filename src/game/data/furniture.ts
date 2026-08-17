@@ -80,7 +80,7 @@ export const FURNITURE: readonly FurnitureDef[] = [
     id: 'table_square', name: 'Square Table', role: 'table', shape: 'tableSquare',
     price: 120, unlockLevel: 1, w: 1, h: 1, ambience: 1, tableCapacity: 4,
     description: 'A sturdy diner table. Seats up to 4 with chairs around it.',
-    palette: P('#a9713a', '#7d5127', '#c98f52', '#f0dcbe'),
+    palette: P('#c4893e', '#8d5d24', '#e8b86a', '#fff4dc'),
   },
   {
     id: 'table_round', name: 'Round Table', role: 'table', shape: 'tableRound',
@@ -106,13 +106,13 @@ export const FURNITURE: readonly FurnitureDef[] = [
     id: 'chair_stool', name: 'Wooden Stool', role: 'chair', shape: 'stool',
     price: 45, unlockLevel: 1, w: 1, h: 1, ambience: 0, seats: 1, comfort: 1,
     description: 'Cheap and cheerful. Gets a customer off their feet.',
-    palette: P('#a9713a', '#7d5127', '#c98f52', '#f0dcbe'),
+    palette: P('#c4893e', '#8d5d24', '#e8b86a', '#fff4dc'),
   },
   {
     id: 'chair_wood', name: 'Dining Chair', role: 'chair', shape: 'chairWood',
     price: 110, unlockLevel: 2, w: 1, h: 1, ambience: 1, seats: 1, comfort: 1.08,
     description: 'A proper chair with a back. Slightly better tips.',
-    palette: P('#96602f', '#6b4320', '#b98249', '#e8d3ae'),
+    palette: P('#b87838', '#7d4e1e', '#d4a05a', '#fff0d0'),
   },
   {
     id: 'chair_padded', name: 'Padded Chair', role: 'chair', shape: 'chairPadded',
@@ -252,7 +252,7 @@ export const FURNITURE: readonly FurnitureDef[] = [
     id: 'clock', name: 'Wall Clock', role: 'wallDecor', shape: 'clock',
     price: 180, unlockLevel: 2, w: 1, h: 1, ambience: 5,
     description: 'Classic diner clock for an empty wall.',
-    palette: P('#4a3a2a', '#2f241a', '#f4efe2', '#c0392b'),
+    palette: P('#c73a2e', '#9d261c', '#fff8ea', '#f2b429'),
   },
   {
     id: 'neon_sign', name: 'Neon Sign', role: 'wallDecor', shape: 'neonSign',

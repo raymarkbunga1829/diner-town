@@ -14,11 +14,11 @@ import { drawFurniture, drawPerson, drawPlatedDish, drawWallItem } from './sprit
 /** Height of the two back walls, in tile-height units. */
 const WALL_HEIGHT = 2.35;
 
-const FLOOR_A = '#c9a273';
-const FLOOR_B = '#bd9465';
-const WALL_NE = '#e7dac2';
-const WALL_NW = '#d5c6ab';
-const WAINSCOT = '#9d6a3c';
+const FLOOR_A = '#f7e2b4';
+const FLOOR_B = '#edc98a';
+const WALL_NE = '#fff4dc';
+const WALL_NW = '#f3e2c0';
+const WAINSCOT = '#c44536';
 
 export interface BuildPreview {
   defId: string;
@@ -87,8 +87,10 @@ export class Renderer {
   private drawBackdrop(): void {
     const { ctx, camera } = this;
     const g = ctx.createLinearGradient(0, 0, 0, camera.viewH);
-    g.addColorStop(0, '#241a14');
-    g.addColorStop(1, '#38281d');
+    g.addColorStop(0, '#6eb8e0');
+    g.addColorStop(0.42, '#b7dff2');
+    g.addColorStop(0.72, '#ffe7b0');
+    g.addColorStop(1, '#f0c888');
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, camera.viewW, camera.viewH);
   }
@@ -105,7 +107,7 @@ export class Renderer {
         if (this.grid.isWallTile(tx, ty)) continue;
         const c = this.tileCentre(tx, ty);
         diamondPath(ctx, c.x, c.y, 1, 1);
-        ctx.fillStyle = (tx + ty) % 2 === 0 ? '#41504a' : '#3b4842';
+        ctx.fillStyle = (tx + ty) % 2 === 0 ? '#d8c4a0' : '#cbb28a';
         ctx.fill();
       }
     }
@@ -114,7 +116,7 @@ export class Renderer {
     for (const ty of [-2, -1]) {
       const c = this.tileCentre(doorX, ty);
       diamondPath(ctx, c.x, c.y, 0.94, 0.94);
-      ctx.fillStyle = ty === -1 ? '#8c5a34' : '#6f4a2e';
+      ctx.fillStyle = ty === -1 ? '#c73a2e' : '#9d261c';
       ctx.fill();
     }
   }
@@ -136,7 +138,7 @@ export class Renderer {
         ctx.fillStyle = (tx + ty) % 2 === 0 ? FLOOR_A : FLOOR_B;
         ctx.fill();
         if (this.game.data.settings.showGrid || opts.buildMode) {
-          ctx.strokeStyle = 'rgba(255,255,255,0.10)';
+          ctx.strokeStyle = 'rgba(168, 42, 32, 0.14)';
           ctx.lineWidth = 1;
           ctx.stroke();
         }
@@ -252,7 +254,7 @@ export class Renderer {
     const a = tileToWorld(doorX, 0);
     const b = tileToWorld(doorX + 1, 0);
 
-    ctx.fillStyle = '#6d4527';
+    ctx.fillStyle = '#8a2a20';
     const post = 5;
     ctx.beginPath();
     ctx.moveTo(a.x, a.y - h);
@@ -281,11 +283,11 @@ export class Renderer {
     const midX = (a.x + b.x) / 2;
     const midY = (a.y + b.y) / 2 - h - 6;
     const open = this.game.data.open;
-    ctx.fillStyle = open ? '#3f7d4f' : '#7d3f3f';
+    ctx.fillStyle = open ? '#2f9d5c' : '#c73a2e';
     roundRect(ctx, midX - 22, midY - 12, 44, 15, 4);
     ctx.fill();
-    ctx.fillStyle = '#f6f1e4';
-    ctx.font = '700 9px system-ui, sans-serif';
+    ctx.fillStyle = '#fff8ea';
+    ctx.font = '700 9px Fredoka, Nunito, system-ui, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(open ? 'OPEN' : 'CLOSED', midX, midY - 4);
@@ -471,18 +473,23 @@ export class Renderer {
 
     ctx.save();
     // Bubble
-    ctx.fillStyle = 'rgba(255,255,255,0.94)';
-    roundRect(ctx, x - 15, top - 15, 30, 26, 8);
+    ctx.fillStyle = 'rgba(255,248,234,0.96)';
+    roundRect(ctx, x - 16, top - 16, 32, 28, 10);
     ctx.fill();
+    ctx.strokeStyle = '#c73a2e';
+    ctx.lineWidth = 2.2;
+    ctx.stroke();
     ctx.beginPath();
-    ctx.moveTo(x - 4, top + 10);
-    ctx.lineTo(x, top + 17);
-    ctx.lineTo(x + 4, top + 10);
+    ctx.moveTo(x - 4, top + 11);
+    ctx.lineTo(x, top + 18);
+    ctx.lineTo(x + 4, top + 11);
     ctx.closePath();
+    ctx.fillStyle = '#fff8ea';
     ctx.fill();
+    ctx.stroke();
 
     if (c.state === 'deciding') {
-      ctx.fillStyle = '#5b6470';
+      ctx.fillStyle = '#c73a2e';
       for (let i = -1; i <= 1; i++) {
         ctx.beginPath();
         ctx.arc(x + i * 6, top - 2, 2.2, 0, Math.PI * 2);
@@ -492,8 +499,8 @@ export class Renderer {
       const dish = DISHES_BY_ID[c.dishId];
       if (dish) drawPlatedDish(ctx, dish, x, top + 3, 0.72);
     } else {
-      ctx.fillStyle = '#5b6470';
-      ctx.font = '700 15px system-ui, sans-serif';
+      ctx.fillStyle = '#8a4e32';
+      ctx.font = '700 15px Fredoka, Nunito, system-ui, sans-serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText('?', x, top - 1);
@@ -520,8 +527,8 @@ export class Renderer {
     const { ctx } = this;
     if (s.state === 'exhausted') {
       ctx.save();
-      ctx.fillStyle = '#f6f1e4';
-      ctx.font = '700 13px system-ui, sans-serif';
+      ctx.fillStyle = '#fff8ea';
+      ctx.font = '700 13px Fredoka, Nunito, system-ui, sans-serif';
       ctx.textAlign = 'center';
       for (let i = 0; i < 3; i++) {
         ctx.globalAlpha = 0.35 + i * 0.22;
@@ -538,14 +545,14 @@ export class Renderer {
   private badge(x: number, y: number, color: string, label: string): void {
     const { ctx } = this;
     ctx.save();
-    ctx.font = '700 9px system-ui, sans-serif';
+    ctx.font = '700 9px Fredoka, Nunito, system-ui, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     const w = ctx.measureText(label).width + 12;
     ctx.fillStyle = color;
     roundRect(ctx, x - w / 2, y - 8, w, 15, 7);
     ctx.fill();
-    ctx.fillStyle = '#2b1d16';
+    ctx.fillStyle = '#fff8ea';
     ctx.fillText(label, x, y);
     ctx.restore();
   }
@@ -566,7 +573,7 @@ export class Renderer {
   private drawFloaters(): void {
     const { ctx } = this;
     ctx.save();
-    ctx.font = '700 13px system-ui, sans-serif';
+    ctx.font = '700 13px Fredoka, Nunito, system-ui, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     for (const f of this.game.floaters) {
@@ -662,7 +669,7 @@ export class Renderer {
       camera.viewW / 2, camera.viewH / 2, Math.max(camera.viewW, camera.viewH) * 0.75,
     );
     g.addColorStop(0, 'rgba(0,0,0,0)');
-    g.addColorStop(1, 'rgba(0,0,0,0.34)');
+    g.addColorStop(1, 'rgba(80, 40, 16, 0.16)');
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, camera.viewW, camera.viewH);
   }

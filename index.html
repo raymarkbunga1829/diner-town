@@ -6,7 +6,7 @@
       name="viewport"
       content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
     />
-    <meta name="theme-color" content="#2b1d16" />
+    <meta name="theme-color" content="#c73a2e" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -14,9 +14,28 @@
       name="description"
       content="Diner Town - build, staff and run your own restaurant. A management sim in the spirit of Restaurant City."
     />
+    <meta property="og:type" content="x:game" />
+    <meta property="og:title" content="Diner Town" />
+    <meta
+      property="og:description"
+      content="Build, staff and run your own restaurant. A 2009-style diner sim."
+    />
+    <meta
+      property="og:image"
+      content="https://raymarkbunga1829.github.io/diner-town/og.jpg"
+    />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta name="twitter:card" content="summary_large_image" />
     <title>Diner Town</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600;700&family=Nunito:wght@700;800;900&display=swap"
+      rel="stylesheet"
+    />
     <link rel="manifest" href="manifest.webmanifest" />
-    <link rel="icon" href="data:," />
+    <link rel="icon" href="icon.svg" />
   </head>
   <body>
     <div id="app">
@@ -25,8 +44,12 @@
     </div>
     <div id="boot">
       <div class="boot-card">
-        <h1>Diner&nbsp;Town</h1>
-        <p>Loading kitchen&hellip;</p>
+        <div class="boot-awning" aria-hidden="true"></div>
+        <div class="boot-sign">
+          <span class="boot-est">Est. this morning</span>
+          <h1>Diner&nbsp;Town</h1>
+          <p>Loading kitchen&hellip;</p>
+        </div>
       </div>
     </div>
     <script type="module" src="/src/main.ts"></script>

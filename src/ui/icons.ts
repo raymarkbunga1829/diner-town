@@ -60,8 +60,8 @@ export function starsHtml(rating: number, size = 13): string {
     const id = `st${i}-${Math.round(rating * 100)}`;
     out += `<svg class="star" viewBox="0 0 24 24" width="${size}" height="${size}">
       <defs><linearGradient id="${id}">
-        <stop offset="${fill * 100}%" stop-color="#f7c85a"/>
-        <stop offset="${fill * 100}%" stop-color="rgba(255,255,255,0.22)"/>
+        <stop offset="${fill * 100}%" stop-color="#f2b429"/>
+        <stop offset="${fill * 100}%" stop-color="rgba(168,42,32,0.18)"/>
       </linearGradient></defs>
       <path fill="url(#${id})" d="${PATHS.star}"/>
     </svg>`;

@@ -600,9 +600,9 @@ export function drawPerson(
   ctx.translate(cx, cy - bob + seatDrop);
   if (flip) ctx.scale(-1, 1);
 
-  const legTop = -13 * s;
-  const bodyTop = -26 * s;
-  const headY = -34 * s;
+  const legTop = -11 * s;
+  const bodyTop = -22 * s;
+  const headY = -32 * s;
 
   // Legs
   ctx.fillStyle = look.pants;
@@ -615,29 +615,29 @@ export function drawPerson(
     roundRect(ctx, 1 * s, legTop + 5 * s, 4.5 * s, 9 * s, 2);
     ctx.fill();
   } else {
-    roundRect(ctx, -5.5 * s + stride * 2, legTop, 4.6 * s, 13 * s, 2.2);
+    roundRect(ctx, -5.5 * s + stride * 2, legTop, 4.6 * s, 11 * s, 2.4);
     ctx.fill();
-    roundRect(ctx, 0.9 * s - stride * 2, legTop, 4.6 * s, 13 * s, 2.2);
+    roundRect(ctx, 0.9 * s - stride * 2, legTop, 4.6 * s, 11 * s, 2.4);
     ctx.fill();
     ctx.fillStyle = shade(look.pants, 0.6);
-    roundRect(ctx, -6 * s + stride * 2, legTop + 12 * s, 5.6 * s, 3 * s, 1.6);
+    roundRect(ctx, -6 * s + stride * 2, legTop + 10 * s, 5.6 * s, 3.2 * s, 1.6);
     ctx.fill();
-    roundRect(ctx, 0.5 * s - stride * 2, legTop + 12 * s, 5.6 * s, 3 * s, 1.6);
+    roundRect(ctx, 0.5 * s - stride * 2, legTop + 10 * s, 5.6 * s, 3.2 * s, 1.6);
     ctx.fill();
   }
 
-  // Torso
+  // Torso — short and rounded, like a 2009 social-game figure.
   ctx.fillStyle = shirt;
-  roundRect(ctx, -7.5 * s, bodyTop, 15 * s, 15 * s, 5);
+  roundRect(ctx, -8.2 * s, bodyTop, 16.4 * s, 13 * s, 6);
   ctx.fill();
   ctx.fillStyle = trim;
-  ctx.fillRect(-7.5 * s, bodyTop + 11 * s, 15 * s, 2.2 * s);
+  ctx.fillRect(-8.2 * s, bodyTop + 9.6 * s, 16.4 * s, 2.2 * s);
   if (!away) {
     ctx.fillStyle = withAlpha(trim, 0.9);
     ctx.beginPath();
-    ctx.moveTo(-2.4 * s, bodyTop);
-    ctx.lineTo(0, bodyTop + 5 * s);
-    ctx.lineTo(2.4 * s, bodyTop);
+    ctx.moveTo(-2.6 * s, bodyTop);
+    ctx.lineTo(0, bodyTop + 5.2 * s);
+    ctx.lineTo(2.6 * s, bodyTop);
     ctx.closePath();
     ctx.fill();
   }
@@ -645,48 +645,62 @@ export function drawPerson(
   // Arms
   ctx.fillStyle = shirt;
   const armSwing = opts.walking ? stride * 3 : 0;
-  roundRect(ctx, -10.5 * s, bodyTop + 2 * s - armSwing, 3.6 * s, 11 * s, 1.8);
+  roundRect(ctx, -11.2 * s, bodyTop + 2 * s - armSwing, 3.8 * s, 10 * s, 2);
   ctx.fill();
   if (!opts.carrying) {
-    roundRect(ctx, 7 * s, bodyTop + 2 * s + armSwing, 3.6 * s, 11 * s, 1.8);
+    roundRect(ctx, 7.4 * s, bodyTop + 2 * s + armSwing, 3.8 * s, 10 * s, 2);
     ctx.fill();
   } else {
     // Carrying arm is raised to hold the tray.
-    roundRect(ctx, 7 * s, bodyTop - 1 * s, 3.6 * s, 8 * s, 1.8);
+    roundRect(ctx, 7.4 * s, bodyTop - 1 * s, 3.8 * s, 7.5 * s, 2);
     ctx.fill();
   }
   ctx.fillStyle = look.skin;
   ctx.beginPath();
-  ctx.arc(-8.7 * s, bodyTop + 13 * s - armSwing, 2.3 * s, 0, Math.PI * 2);
+  ctx.arc(-9.2 * s, bodyTop + 12 * s - armSwing, 2.5 * s, 0, Math.PI * 2);
   ctx.fill();
   if (!opts.carrying) {
     ctx.beginPath();
-    ctx.arc(8.8 * s, bodyTop + 13 * s + armSwing, 2.3 * s, 0, Math.PI * 2);
+    ctx.arc(9.3 * s, bodyTop + 12 * s + armSwing, 2.5 * s, 0, Math.PI * 2);
     ctx.fill();
   }
 
-  // Head
+  // Head — oversized, original chibi (not a copy of any licensed character).
   ctx.fillStyle = look.skin;
   ctx.beginPath();
-  ctx.arc(0, headY, 8.2 * s, 0, Math.PI * 2);
+  ctx.arc(0, headY, 10.6 * s, 0, Math.PI * 2);
   ctx.fill();
   ctx.fillStyle = shade(look.skin, 0.92);
   ctx.beginPath();
-  ctx.ellipse(0, headY + 7.4 * s, 3.4 * s, 2 * s, 0, 0, Math.PI * 2);
+  ctx.ellipse(0, headY + 8.8 * s, 4 * s, 2.2 * s, 0, 0, Math.PI * 2);
   ctx.fill();
 
   drawHair(ctx, look, headY, s, away);
 
   if (!away) {
+    // Eyes
     ctx.fillStyle = '#2b2118';
     ctx.beginPath();
-    ctx.arc(-2.9 * s, headY - 0.6 * s, 1.25 * s, 0, Math.PI * 2);
-    ctx.arc(2.9 * s, headY - 0.6 * s, 1.25 * s, 0, Math.PI * 2);
+    ctx.arc(-3.4 * s, headY - 0.4 * s, 1.7 * s, 0, Math.PI * 2);
+    ctx.arc(3.4 * s, headY - 0.4 * s, 1.7 * s, 0, Math.PI * 2);
     ctx.fill();
-    ctx.strokeStyle = 'rgba(60,40,30,0.75)';
-    ctx.lineWidth = 1.1 * s;
+    ctx.fillStyle = '#fff';
     ctx.beginPath();
-    ctx.arc(0, headY + 2.4 * s, 2.6 * s, 0.25 * Math.PI, 0.75 * Math.PI);
+    ctx.arc(-2.8 * s, headY - 1.0 * s, 0.65 * s, 0, Math.PI * 2);
+    ctx.arc(4.0 * s, headY - 1.0 * s, 0.65 * s, 0, Math.PI * 2);
+    ctx.fill();
+    // Rosy cheeks
+    ctx.fillStyle = withAlpha('#e87a7a', 0.42);
+    ctx.beginPath();
+    ctx.ellipse(-5.6 * s, headY + 3.4 * s, 2.5 * s, 1.5 * s, 0, 0, Math.PI * 2);
+    ctx.ellipse(5.6 * s, headY + 3.4 * s, 2.5 * s, 1.5 * s, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // Smile
+    ctx.strokeStyle = 'rgba(80,40,30,0.8)';
+    ctx.lineWidth = 1.25 * s;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.arc(0, headY + 2.6 * s, 3.2 * s, 0.18 * Math.PI, 0.82 * Math.PI);
     ctx.stroke();
   }
 
@@ -737,51 +751,51 @@ function drawHair(
   switch (look.hairStyle) {
     case 'bald':
       ctx.beginPath();
-      ctx.arc(0, headY - 1.5 * s, 8.2 * s, Math.PI * 1.15, Math.PI * 1.85);
+      ctx.arc(0, headY - 1.8 * s, 10.4 * s, Math.PI * 1.15, Math.PI * 1.85);
       ctx.fill();
       break;
     case 'cap':
       ctx.beginPath();
-      ctx.arc(0, headY - 1 * s, 8.4 * s, Math.PI, 0);
+      ctx.arc(0, headY - 1.2 * s, 10.8 * s, Math.PI, 0);
       ctx.fill();
       ctx.fillStyle = shade(look.hair, 0.75);
       ctx.beginPath();
-      ctx.ellipse(away ? 0 : 4 * s, headY - 1 * s, 8 * s, 2.2 * s, 0, 0, Math.PI * 2);
+      ctx.ellipse(away ? 0 : 5 * s, headY - 1.1 * s, 10 * s, 2.6 * s, 0, 0, Math.PI * 2);
       ctx.fill();
       break;
     case 'bun':
       ctx.beginPath();
-      ctx.arc(0, headY - 0.5 * s, 8.5 * s, Math.PI, 0);
+      ctx.arc(0, headY - 0.6 * s, 10.8 * s, Math.PI, 0);
       ctx.fill();
       ctx.beginPath();
-      ctx.arc(-6 * s, headY - 8 * s, 4 * s, 0, Math.PI * 2);
+      ctx.arc(-7.2 * s, headY - 10 * s, 4.6 * s, 0, Math.PI * 2);
       ctx.fill();
       break;
     case 'long':
       ctx.beginPath();
-      ctx.ellipse(0, headY + 1 * s, 9.4 * s, 10.5 * s, 0, Math.PI, 0);
+      ctx.ellipse(0, headY + 1.4 * s, 11.4 * s, 12.2 * s, 0, Math.PI, 0);
       ctx.fill();
       ctx.beginPath();
-      roundRect(ctx, -9.4 * s, headY - 1 * s, 3.4 * s, 13 * s, 2);
+      roundRect(ctx, -11.2 * s, headY - 1 * s, 3.8 * s, 14 * s, 2);
       ctx.fill();
       ctx.beginPath();
-      roundRect(ctx, 6 * s, headY - 1 * s, 3.4 * s, 13 * s, 2);
+      roundRect(ctx, 7.4 * s, headY - 1 * s, 3.8 * s, 14 * s, 2);
       ctx.fill();
       break;
     case 'curly':
       for (let i = 0; i < 6; i++) {
         const a = Math.PI + (i / 5) * Math.PI;
         ctx.beginPath();
-        ctx.arc(Math.cos(a) * 7 * s, headY + Math.sin(a) * 7 * s, 3.6 * s, 0, Math.PI * 2);
+        ctx.arc(Math.cos(a) * 8.6 * s, headY + Math.sin(a) * 8.6 * s, 4.2 * s, 0, Math.PI * 2);
         ctx.fill();
       }
       break;
     default:
       ctx.beginPath();
-      ctx.arc(0, headY - 0.8 * s, 8.5 * s, Math.PI * 1.02, Math.PI * 1.98);
+      ctx.arc(0, headY - 1.0 * s, 10.8 * s, Math.PI * 1.02, Math.PI * 1.98);
       ctx.fill();
       ctx.beginPath();
-      roundRect(ctx, -8.6 * s, headY - 2.4 * s, 3 * s, 4.5 * s, 1.5);
+      roundRect(ctx, -10.6 * s, headY - 2.6 * s, 3.4 * s, 5.2 * s, 1.6);
       ctx.fill();
       break;
   }

@@ -129,6 +129,7 @@ tools/        Headless checks run by `npm run check`
 A few decisions worth knowing about:
 
 - **No image or audio files.** Every sprite is drawn with canvas paths from a palette on the furniture definition, and every sound effect is synthesised with the Web Audio API. That keeps the repository text-only and the download tiny.
+- **Original 2009-diner look.** The cream, cherry and gold HUD, chibi staff and sunny dining room are original art — a genre homage, not a copy of Playfish or EA assets.
 - **The grid is the source of truth.** `game/grid.ts` indexes placed furniture into solid / flat / wall layers and answers all the spatial questions the simulation asks. Placement is rejected if it would strand part of the floor, which is checked with a flood fill from the doorway.
 - **Persistent versus live state.** `SaveData` holds only what should survive a reload. Customers, orders and floating text are rebuilt each session, so closing the tab simply sends the current diners home. Time away is paid out through a capped offline-earnings estimate rather than by replaying the simulation.
 - **Panels are re-rendered, not diffed.** Every panel is a function of current state; a `revision` counter on the game marks state dirty. At this scale it is far simpler than incremental updates and fast enough to be invisible.
