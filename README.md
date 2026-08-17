@@ -49,6 +49,7 @@ npm run build     # typecheck, then bundle to dist/
 npm run preview   # serve the production build
 npm run typecheck # tsc --noEmit
 npm run check     # headless sanity checks (see below)
+npm run deploy    # build and publish to GitHub Pages without Actions
 ```
 
 `npm run check` bundles `tools/checks.ts` with esbuild and runs it under Node. It
@@ -87,6 +88,12 @@ publishes the game.
 
 Because Pages serves projects from a subpath, the workflow passes the repository
 name through `BASE_PATH`. For any other host the default (`/`) is correct.
+
+If Actions is not available on the account — a disabled runner, a billing hold,
+or a private repository without minutes — `npm run deploy` publishes the same
+build without it. It builds with the right `BASE_PATH`, force-pushes `dist/` to a
+`gh-pages` branch, points Pages at that branch and asks it to rebuild. It needs
+an authenticated `gh` CLI and takes about a minute to go live.
 
 ## How it is put together
 
