@@ -182,6 +182,8 @@ export interface DayLedger {
   tips: number;
   regularsDelighted: number;
   regularsLost: number;
+  /** Fame earned today, which is only ever non-zero at the level cap. */
+  fame: number;
 }
 
 /** The single thing the recap suggests doing next. */
@@ -215,6 +217,12 @@ export interface SaveData {
   coins: number;
   xp: number;
   level: number;
+  /**
+   * Lifetime fame, which is the experience earned once the restaurant level has
+   * capped out. Stars are derived from it rather than stored, so the two can
+   * never drift apart in a save.
+   */
+  fame: number;
   gridSize: number;
   doorX: number;
   open: boolean;

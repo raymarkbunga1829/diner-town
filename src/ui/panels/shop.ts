@@ -6,6 +6,7 @@ import {
   type FurnitureDef,
   type ShopTab,
 } from '../../game/data/furniture';
+import { unlockLabel } from '../../game/progression';
 import type { AppApi, Panel } from '../api';
 import { el, fmt } from '../dom';
 import { iconSvg } from '../icons';
@@ -39,7 +40,6 @@ export function createShopPanel(app: AppApi): Panel {
       tab = id as ShopTab;
     },
     render(body) {
-      const level = app.game.data.level;
       const items = FURNITURE.filter((f) => ROLE_LABELS[f.role] === tab);
       if (!items.length) {
         body.append(emptyState('Nothing here yet.'));
@@ -48,7 +48,7 @@ export function createShopPanel(app: AppApi): Panel {
 
       const grid = el('div', { class: 'grid' });
       for (const def of items) {
-        const locked = def.unlockLevel > level;
+        const locked = !app.game.unlocked(def);
         const affordable = app.game.canAfford(def.price);
 
         const card = el('div', { class: `card${locked ? ' locked' : ''}` }, [
@@ -67,7 +67,7 @@ export function createShopPanel(app: AppApi): Panel {
               style: 'display:inline-flex;align-items:center;gap:4px',
             }),
             locked
-              ? chip(`Level ${def.unlockLevel}`, 'warn')
+              ? chip(unlockLabel(def), 'warn')
               : el('button', {
                   class: 'btn primary',
                   text: 'Place',

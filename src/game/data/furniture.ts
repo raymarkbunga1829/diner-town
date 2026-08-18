@@ -53,6 +53,11 @@ export interface FurnitureDef {
   shape: FurnitureShape;
   price: number;
   unlockLevel: number;
+  /**
+   * Fame stars needed on top of the level, for pieces that only arrive after the
+   * restaurant level has capped out. Absent on everything else.
+   */
+  unlockStars?: number;
   /** Footprint in tiles. */
   w: number;
   h: number;
@@ -126,6 +131,12 @@ export const FURNITURE: readonly FurnitureDef[] = [
     description: 'Absurdly comfortable. Guests feel important and pay like it.',
     palette: P('#6a2f4d', '#451c31', '#a4547a', '#f2d27c'),
   },
+  {
+    id: 'chair_wing', name: 'Wingback Chair', role: 'chair', shape: 'chairThrone',
+    price: 2200, unlockLevel: 18, w: 1, h: 1, ambience: 12, seats: 1, comfort: 1.55,
+    description: 'The best seat in the house. Guests settle in and tip like it.',
+    palette: P('#2f4a44', '#1c302c', '#5c8a7c', '#e2c27a'),
+  },
 
   // ---------- Stoves ----------
   {
@@ -165,6 +176,12 @@ export const FURNITURE: readonly FurnitureDef[] = [
     price: 780, unlockLevel: 7, w: 1, h: 1, ambience: 2, slots: 4,
     description: 'Holds four plates, so a busy kitchen never stalls.',
     palette: P('#8b9299', '#5c6268', '#c0c7cd', '#eef2f4'),
+  },
+  {
+    id: 'counter_marble', name: 'Marble Pass', role: 'counter', shape: 'counterSteel',
+    price: 2600, unlockLevel: 17, w: 1, h: 1, ambience: 6, slots: 6,
+    description: 'Six plates can wait here at once, so a late kitchen never queues on itself.',
+    palette: P('#b6b3a8', '#87847c', '#e8e5db', '#c2a15a'),
   },
   {
     id: 'sink_basic', name: 'Wash Basin', role: 'sink', shape: 'sinkBasic',
@@ -228,6 +245,18 @@ export const FURNITURE: readonly FurnitureDef[] = [
     description: 'Tasteful? Debatable. Effective? Absolutely.',
     palette: P('#b08a2e', '#7d611c', '#f2d27c', '#fff3c4'),
   },
+  {
+    id: 'atrium_tree', name: 'Atrium Tree', role: 'decor', shape: 'palm',
+    price: 11000, unlockLevel: 20, w: 1, h: 1, ambience: 90,
+    description: 'A +90 Style centrepiece grown through the roof light. The room finally looks finished.',
+    palette: P('#6b4a2c', '#452e1a', '#3f8a4c', '#8fd07a'),
+  },
+  {
+    id: 'founders_bronze', name: 'Bronze Founder', role: 'decor', shape: 'statue',
+    price: 16000, unlockLevel: 20, unlockStars: 5, w: 1, h: 1, ambience: 110,
+    description: 'A +110 Style cast of whoever started all this. Earned with fame, not coins alone.',
+    palette: P('#7d5a2c', '#4f371a', '#c99a52', '#f0d59a'),
+  },
 
   // ---------- Floor & wall ----------
   {
@@ -241,6 +270,12 @@ export const FURNITURE: readonly FurnitureDef[] = [
     price: 620, unlockLevel: 8, w: 1, h: 1, ambience: 14,
     description: 'Intricate and rich. Walkable, stackable, gorgeous.',
     palette: P('#5a2d4a', '#3a1a30', '#d8a24a', '#e9d6a8'),
+  },
+  {
+    id: 'rug_gallery', name: 'Gallery Rug', role: 'rug', shape: 'rugFancy',
+    price: 2600, unlockLevel: 19, w: 1, h: 1, ambience: 26,
+    description: 'Wall-to-wall pattern for the middle of the room. Walkable, stackable, enormous.',
+    palette: P('#2f3f5c', '#1b2537', '#c9a24a', '#e6dcc0'),
   },
   {
     id: 'painting', name: 'Framed Painting', role: 'wallDecor', shape: 'painting',
@@ -259,6 +294,12 @@ export const FURNITURE: readonly FurnitureDef[] = [
     price: 1250, unlockLevel: 10, w: 1, h: 1, ambience: 26,
     description: 'Glowing and loud. Visible from the street, basically.',
     palette: P('#2a2430', '#191520', '#ff5ea8', '#65e8ff'),
+  },
+  {
+    id: 'regulars_wall', name: 'Wall of Regulars', role: 'wallDecor', shape: 'painting',
+    price: 5200, unlockLevel: 20, unlockStars: 3, w: 1, h: 1, ambience: 46,
+    description: 'A +46 Style row of framed faces who never stopped coming back.',
+    palette: P('#4a3520', '#2d2013', '#d8b072', '#f4ead2'),
   },
 ];
 

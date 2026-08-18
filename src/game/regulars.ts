@@ -11,7 +11,7 @@ import { hashString } from '../engine/rng';
 import { DISHES_BY_ID } from './data/dishes';
 import { REGULARS, REGULARS_BY_ID, type RegularDef } from './data/regulars';
 import { appearanceFrom } from './people';
-import { DAY_LENGTH } from './progression';
+import { DAY_LENGTH, isUnlocked } from './progression';
 import type { Appearance, RegularState } from './types';
 
 /** How a visit ended, which decides how soon they come back. */
@@ -19,6 +19,15 @@ export type VisitMood = 'delighted' | 'fed' | 'snubbed';
 
 export function regularLook(def: RegularDef): Appearance {
   return { ...appearanceFrom(`regular-${def.id}`), ...def.look };
+}
+
+/**
+ * Whether this face is part of the diner's life yet. The original roster is
+ * there from the first morning; the late ones turn up with the food they came
+ * for, which is what keeps them out of the first hour.
+ */
+export function regularUnlocked(def: RegularDef, level: number, stars: number): boolean {
+  return isUnlocked({ unlockLevel: def.unlockLevel ?? 1, unlockStars: def.unlockStars }, level, stars);
 }
 
 /** Given name only, for floaters where the full name would not fit. */

@@ -7,9 +7,15 @@ import {
   dayNumber,
   expansionCost,
   expansionLevel,
+  fameForStar,
+  fameProgress,
+  fameTitle,
   MAX_GRID,
+  MAX_LEVEL,
+  STAR_REWARDS,
+  unlocksAtStar,
 } from '../../game/progression';
-import { favouriteFor, regularLook } from '../../game/regulars';
+import { favouriteFor, regularLook, regularUnlocked } from '../../game/regulars';
 import {
   BACKUP_KEY,
   Game,
@@ -157,6 +163,7 @@ function renderOverview(app: AppApi, body: HTMLElement): void {
     );
   }
 
+  renderFame(app, body);
   renderRegulars(app, body);
 
   body.append(
@@ -180,14 +187,74 @@ function renderOverview(app: AppApi, body: HTMLElement): void {
 }
 
 /**
+ * The endgame track. Once the restaurant level caps out, experience becomes
+ * fame, and the first five stars each hand over something real. Hidden entirely
+ * before then, so a diner on day three is never shown a goal it cannot chase.
+ */
+function renderFame(app: AppApi, body: HTMLElement): void {
+  const g = app.game;
+  if (!g.atLevelCap && g.data.fame <= 0) return;
+
+  const fame = fameProgress(g.data.fame);
+  const title = fameTitle(fame.star);
+
+  body.append(
+    el('div', { class: 'section-title', text: 'Fame' }),
+    el('div', { class: 'card' }, [
+      el('div', { class: 'row' }, [
+        el('span', { class: 'name', text: title ?? 'Word is getting around' }),
+        chip(plural(fame.star, 'star'), fame.star > 0 ? 'good' : 'info'),
+      ]),
+      meter(fame.into / fame.span, '#e8b53c'),
+      el('div', {
+        class: 'desc',
+        style: 'margin-top:6px',
+        text: `${fmt(Math.floor(fame.into))} of ${fmt(fame.span)} fame towards star ${fame.star + 1}. Every scrap of experience your kitchen earns past level ${MAX_LEVEL} counts, so the bar keeps moving for as long as you keep serving.`,
+      }),
+    ]),
+  );
+
+  const list = el('div', { class: 'list' });
+  for (const reward of STAR_REWARDS) {
+    const earned = fame.star >= reward.star;
+    const unlocks = unlocksAtStar(reward.star);
+    const brings = [
+      ...unlocks.dishes.map((name) => `${name} on the recipe list`),
+      ...unlocks.furniture.map((name) => `${name} in the shop`),
+      ...unlocks.regulars.map((name) => `${name} starts dropping in`),
+      ...(reward.menuSlots ? [plural(reward.menuSlots, 'extra menu slot')] : []),
+      ...(reward.staffSlots ? [plural(reward.staffSlots, 'extra staff position')] : []),
+    ];
+    list.append(
+      el('div', { class: 'row-item', style: 'align-items:flex-start' }, [
+        el('div', { class: 'row-main' }, [
+          el('div', { class: 'row-title' }, [
+            el('span', { text: `Star ${reward.star} · ${reward.title}` }),
+            earned ? chip('Earned', 'good') : chip(`${fmt(fameForStar(reward.star))} fame`, 'warn'),
+          ]),
+          el('div', { class: 'row-sub', text: reward.note }),
+          brings.length ? el('div', { class: 'row-sub', style: 'margin-top:4px', text: brings.join(' · ') }) : null,
+        ].filter(Boolean) as Node[]),
+      ]),
+    );
+  }
+  body.append(list);
+}
+
+/**
  * Who keeps coming back, what they hope to be served and when they are next
  * due. The favourite is the actionable part: it is drawn from the current menu,
  * so dropping a dish quietly changes what a regular will ask for.
  */
 function renderRegulars(app: AppApi, body: HTMLElement): void {
   const g = app.game;
+  // Faces the diner has not earned yet stay off the list entirely, so a level
+  // or a star introduces somebody rather than ticking off a name in a table.
   const roster = g.data.regulars
-    .filter((r) => REGULARS_BY_ID[r.id])
+    .filter((r) => {
+      const def = REGULARS_BY_ID[r.id];
+      return !!def && regularUnlocked(def, g.data.level, g.stars);
+    })
     .sort((a, b) => a.nextVisitAt - b.nextVisitAt);
   if (!roster.length) return;
 

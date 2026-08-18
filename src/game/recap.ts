@@ -21,6 +21,7 @@ export function emptyLedger(day: number): DayLedger {
     tips: 0,
     regularsDelighted: 0,
     regularsLost: 0,
+    fame: 0,
   };
 }
 
@@ -39,6 +40,7 @@ export function normaliseLedger(raw: unknown, day: number): DayLedger {
     tips: count(old.tips),
     regularsDelighted: count(old.regularsDelighted),
     regularsLost: count(old.regularsLost),
+    fame: count(old.fame),
   };
 }
 

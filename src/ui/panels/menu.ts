@@ -10,6 +10,7 @@ import {
   type Dish,
 } from '../../game/data/dishes';
 import { INGREDIENTS, type IngredientId } from '../../game/data/ingredients';
+import { unlockLabel } from '../../game/progression';
 import type { AppApi, Panel } from '../api';
 import { el, fmt, plural } from '../dom';
 import { iconSvg } from '../icons';
@@ -54,16 +55,15 @@ export function createMenuPanel(app: AppApi): Panel {
       tab = id as Tab;
     },
     render(body) {
-      const level = app.game.data.level;
       let dishes: Dish[];
       if (tab === 'menu') {
         dishes = app.game.data.menu
           .map((id) => DISHES.find((d) => d.id === id))
           .filter((d): d is Dish => Boolean(d));
       } else if (tab === 'all') {
-        dishes = DISHES.filter((d) => d.unlockLevel <= level && !app.game.isOnMenu(d.id));
+        dishes = DISHES.filter((d) => app.game.unlocked(d) && !app.game.isOnMenu(d.id));
       } else {
-        dishes = DISHES.filter((d) => d.unlockLevel > level);
+        dishes = DISHES.filter((d) => !app.game.unlocked(d));
       }
 
       if (!dishes.length) {
@@ -99,7 +99,7 @@ function dishRow(app: AppApi, dish: Dish, tab: Tab): HTMLElement {
   const title = el('div', { class: 'row-title' }, [
     el('span', { text: dish.name }),
     locked
-      ? chip(`Level ${dish.unlockLevel}`, 'warn')
+      ? chip(unlockLabel(dish), 'warn')
       : chip(`Lv ${mastery.level}${mastery.level >= MAX_DISH_LEVEL ? ' MAX' : ''}`, 'info'),
     stock > 0 && !locked ? chip(`${plural(stock, 'serving')} ready`, stock > 4 ? 'good' : 'warn') : null,
     missing.length && !locked ? chip(`Need ${missing.join(', ')}`, 'warn') : null,
@@ -127,7 +127,7 @@ function dishRow(app: AppApi, dish: Dish, tab: Tab): HTMLElement {
       ]);
 
   const action = locked
-    ? chip(`Unlocks at level ${dish.unlockLevel}`, 'warn')
+    ? chip(`Unlocks at ${unlockLabel(dish).toLowerCase()}`, 'warn')
     : el('button', {
         class: `btn ${onMenu ? 'danger' : 'primary'}`,
         html: onMenu ? 'Remove' : `${iconSvg('plus', 14)} Add`,
@@ -135,7 +135,12 @@ function dishRow(app: AppApi, dish: Dish, tab: Tab): HTMLElement {
           const result = app.game.toggleMenu(dish.id);
           if (result === 'full') {
             audio.play('error');
-            app.toast(`Menu is full (${app.game.menuCapacity} slots). Level up for more.`, 'bad');
+            app.toast(
+              `Menu is full (${app.game.menuCapacity} slots). ${
+                app.game.atLevelCap ? 'Fame stars buy more.' : 'Level up for more.'
+              }`,
+              'bad',
+            );
           } else {
             audio.play(result === 'added' ? 'bell' : 'tap');
             app.toast(
