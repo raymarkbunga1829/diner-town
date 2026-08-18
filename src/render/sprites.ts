@@ -5,6 +5,7 @@ import type { FurnitureDef } from '../game/data/furniture';
 import type { Ingredient } from '../game/data/ingredients';
 import type { Appearance } from '../game/types';
 import {
+  type BoxColors,
   diamondPath,
   faces,
   isoBox,
@@ -569,14 +570,151 @@ export interface PersonOptions {
   carrying?: Dish | null;
   /** Small prop in hand. */
   prop?: 'notepad' | 'cloth' | 'pan' | null;
+  /** Out of energy: the figure slumps instead of standing to attention. */
+  exhausted?: boolean;
   /** Fade the whole figure. */
   alpha?: number;
 }
 
+/** One of the two faces of a box the camera can see. */
+type Plane = 'left' | 'right';
+
 /**
- * Characters are drawn as simple front-facing figures with a mirrored pose for
- * the two left-hand facings and a hidden face for the two away facings, which
- * reads clearly at small sizes without needing sprite sheets.
+ * Which way a figure is turned, said in the terms its body is built from: the
+ * grid axis it faces, the axis across its shoulders — always chosen to point at
+ * the camera, so "near arm" needs no special case per facing — and which of a
+ * box's two visible faces its front and back land on.
+ */
+interface Frame {
+  fwd: readonly [number, number];
+  side: readonly [number, number];
+  /** Null on the two facings where the figure has its back to the camera. */
+  front: Plane | null;
+  /** Set instead of `front` on those two facings. */
+  back: Plane | null;
+  /** The flank towards the camera, in view whichever way the figure is turned. */
+  flank: Plane;
+}
+
+const FRAMES: Record<Facing, Frame> = {
+  se: { fwd: [1, 0], side: [0, 1], front: 'right', back: null, flank: 'left' },
+  sw: { fwd: [0, 1], side: [1, 0], front: 'left', back: null, flank: 'right' },
+  ne: { fwd: [0, -1], side: [1, 0], front: null, back: 'left', flank: 'right' },
+  nw: { fwd: [-1, 0], side: [0, 1], front: null, back: 'right', flank: 'left' },
+};
+
+interface Figure extends Frame {
+  ctx: CanvasRenderingContext2D;
+  /** Centre of the tile the figure is standing on. */
+  cx: number;
+  cy: number;
+  /** Build scale, applied to every measurement below. */
+  s: number;
+}
+
+/**
+ * One box of a body, in the figure's own frame: `u` runs across the body towards
+ * the camera, `v` runs the way the figure faces, `y` is the lift off the floor,
+ * and `w`/`d`/`h` are its size across, front-to-back and up. Tile units, before
+ * the build scale, exactly like the furniture.
+ */
+interface Limb {
+  u: number;
+  v: number;
+  y: number;
+  w: number;
+  d: number;
+  h: number;
+}
+
+/** Where a point in the figure's frame lands on screen. */
+function spot(f: Figure, u: number, v: number, y = 0): { x: number; y: number } {
+  const gx = (f.side[0] * u + f.fwd[0] * v) * f.s;
+  const gy = (f.side[1] * u + f.fwd[1] * v) * f.s;
+  return {
+    x: f.cx + (gx - gy) * (TILE_W / 2),
+    y: f.cy + (gx + gy) * (TILE_H / 2) - y * f.s * TILE_Z,
+  };
+}
+
+/** A limb's footprint on the two grid axes, which swap with the facing. */
+function footprint(f: Figure, l: Limb): [number, number] {
+  return f.fwd[0] !== 0 ? [l.d * f.s, l.w * f.s] : [l.w * f.s, l.d * f.s];
+}
+
+/** One body part, as an iso box with a lit top and two shaded sides. */
+function limb(f: Figure, l: Limb, colors: BoxColors): void {
+  const at = spot(f, l.u, l.v);
+  const [sx, sy] = footprint(f, l);
+  isoBox(f.ctx, at.x, at.y, sx, sy, l.h * f.s, colors, l.y * f.s);
+}
+
+/**
+ * The three face colours of a body part. `faces` shades the left-hand face hard,
+ * which is right for a building but would leave half the crowd with their face
+ * in shadow, so the plane a figure's front lands on is lifted a little.
+ */
+function volume(f: Figure, base: string): BoxColors {
+  const c = faces(base);
+  if (f.front === 'left') return { ...c, left: shade(base, 0.86) };
+  if (f.front === 'right') return { ...c, right: shade(base, 0.98) };
+  return c;
+}
+
+/**
+ * Lay flat detail onto one of a limb's two camera-facing planes: local x runs
+ * along the plane either side of its centre, local y runs straight down the
+ * screen from its top edge, and the plane's width and height are handed to the
+ * caller. Because the shear is the plane's own, a face or a row of buttons drawn
+ * here leans with the box it belongs to instead of floating across the front of
+ * the figure — which is the whole difference between a painted head and a decal.
+ */
+function onPlane(
+  f: Figure,
+  l: Limb,
+  which: Plane | null,
+  paint: (half: number, height: number) => void,
+): void {
+  if (!which) return;
+  const at = spot(f, l.u, l.v, l.y + l.h);
+  const [sx, sy] = footprint(f, l);
+  const ax = (TILE_W / 4) * sx;
+  const ay = (TILE_H / 4) * sx;
+  const bx = (TILE_W / 4) * sy;
+  const by = (TILE_H / 4) * sy;
+  const { ctx } = f;
+  ctx.save();
+  if (which === 'right') {
+    ctx.transform(1, -0.5, 0, 1, at.x + ax, at.y + ay);
+    paint(bx, l.h * f.s * TILE_Z);
+  } else {
+    ctx.transform(1, 0.5, 0, 1, at.x - bx, at.y + by);
+    paint(ax, l.h * f.s * TILE_Z);
+  }
+  ctx.restore();
+}
+
+/**
+ * Lift of the hips, which every other measurement hangs off. Seats in this game
+ * stand half a tile-height off the floor, which on a body this short is already
+ * hip height — so sitting down folds the legs up rather than lowering the head.
+ */
+const HIP_STAND = 0.4;
+const HIP_SIT = 0.46;
+/** How far the legs and the arms sit either side of the middle. */
+const LEG_U = 0.12;
+const ARM_U = 0.27;
+
+/**
+ * People are built the way the furniture is: a stack of small isometric boxes
+ * with a lit top and two shaded sides, so a figure standing on the tiles catches
+ * the same light as the chair beside it. Nothing is mirrored — a body is
+ * assembled in its own frame, and the two away facings simply show the back of
+ * the head — and every piece of detail is painted on the plane of the box it
+ * belongs to, so it leans with the figure rather than sitting flat on top of it.
+ *
+ * Proportions stay chibi: a slightly oversized head on a short body, which is
+ * what keeps a face readable when a tile is only 64px wide.
  */
 export function drawPerson(
   ctx: CanvasRenderingContext2D,
@@ -585,269 +723,313 @@ export function drawPerson(
   cy: number,
   opts: PersonOptions,
 ): void {
-  const away = opts.facing === 'ne' || opts.facing === 'nw';
-  const flip = opts.facing === 'sw' || opts.facing === 'nw';
-  // Diners are drawn a little larger than life so their faces and uniforms still
-  // read at the default zoom, where a tile is only 64px wide.
-  const s = look.build * PERSON_SCALE;
+  const f: Figure = { ctx, cx, cy, s: look.build * PERSON_SCALE, ...FRAMES[opts.facing] };
   const shirt = opts.uniform?.shirt ?? look.shirt;
   const trim = opts.uniform?.trim ?? shade(shirt, 0.7);
 
   const stride = opts.walking ? Math.sin(opts.time * 9) : 0;
-  const bob = opts.walking ? Math.abs(Math.cos(opts.time * 9)) * 1.9 : Math.sin(opts.time * 1.6) * 0.5;
-  const seatDrop = opts.sitting ? 7 : 0;
-  // The upper body counter-rotates against the stride, which is what makes the
-  // walk read as walking rather than as a figure sliding along the floor.
-  const sway = opts.walking ? -stride * 0.9 : 0;
-
-  // Light falls from the upper left, so the -x side of every limb is the lit one.
-  const shirtLit = shade(shirt, 1.1);
-  const shirtDark = shade(shirt, 0.82);
-  const pantsDark = shade(look.pants, 0.8);
-  const skinShade = shade(look.skin, 0.9);
-  const ink = 'rgba(38, 26, 20, 0.5)';
+  // Breathing when still, a bounce when walking; either way the whole upper body
+  // rides it, which is what stops a figure looking like it is sliding along.
+  const bob = opts.walking
+    ? Math.abs(Math.cos(opts.time * 9)) * 0.05
+    : Math.sin(opts.time * 1.6) * 0.012;
+  // Spent staff settle onto their hips and lean over their toes.
+  const lean = opts.exhausted ? 0.05 : 0;
+  const settle = opts.exhausted ? 0.05 : 0;
+  const sway = opts.walking ? -stride * 0.015 : 0;
+  const hip = (opts.sitting ? HIP_SIT : HIP_STAND) + bob - settle;
 
   ctx.save();
   if (opts.alpha !== undefined) ctx.globalAlpha = opts.alpha;
-  // The shadow stretches as the figure lifts off, which sells the bounce.
-  softShadow(ctx, cx, cy, (opts.sitting ? 0.3 : 0.36) + bob * 0.012, 0.2);
+  // The shadow spreads as the figure lifts off, which sells the bounce.
+  softShadow(ctx, cx, cy, (opts.sitting ? 0.3 : 0.36) + bob * 0.4, 0.2);
 
-  ctx.translate(cx, cy - bob + seatDrop);
-  if (flip) ctx.scale(-1, 1);
+  drawLeg(f, look, -1, hip, stride, opts.sitting);
+  drawLeg(f, look, 1, hip, stride, opts.sitting);
+  drawArm(f, look, opts, -1, hip, stride, lean, shirt);
+  drawTorso(f, look, opts, hip, lean, sway, shirt, trim);
+  drawHeadGroup(f, look, opts, hip, lean, sway);
+  const hand = drawArm(f, look, opts, 1, hip, stride, lean, shirt);
+  drawHeld(f, opts, hand);
 
-  // Short body under an oversized head: the house chibi proportions.
-  const legTop = -11 * s;
-  const bodyTop = -22 * s;
-  const headY = -32 * s;
-  const headR = 10.6 * s;
+  ctx.restore();
+}
 
-  // ------------------------------------------------------------------- legs
-  ctx.fillStyle = look.pants;
-  if (opts.sitting) {
-    // Thighs forward, shins dropping to the floor.
-    roundRect(ctx, -6 * s, legTop, 12 * s, 5.5 * s, 3);
-    ctx.fill();
-    ctx.fillStyle = pantsDark;
-    roundRect(ctx, -5.5 * s, legTop + 4.6 * s, 4.5 * s, 7.4 * s, 2);
-    ctx.fill();
-    roundRect(ctx, 1 * s, legTop + 4.6 * s, 4.5 * s, 7.4 * s, 2);
-    ctx.fill();
-    ctx.fillStyle = '#3b2c22';
-    roundRect(ctx, -6 * s, legTop + 11.4 * s, 5.4 * s, 2.6 * s, 1.3);
-    ctx.fill();
-    roundRect(ctx, 0.6 * s, legTop + 11.4 * s, 5.4 * s, 2.6 * s, 1.3);
-    ctx.fill();
-  } else {
-    // Trailing leg first so the leading one overlaps it.
-    ctx.fillStyle = pantsDark;
-    roundRect(ctx, 0.9 * s - stride * 2, legTop, 4.6 * s, 11 * s, 2.4);
-    ctx.fill();
-    ctx.fillStyle = look.pants;
-    roundRect(ctx, -5.5 * s + stride * 2, legTop, 4.6 * s, 11 * s, 2.4);
-    ctx.fill();
+/** Thigh, shin and shoe down one side, either standing or folded onto a chair. */
+function drawLeg(
+  f: Figure,
+  look: Appearance,
+  side: 1 | -1,
+  hip: number,
+  stride: number,
+  sitting: boolean,
+): void {
+  const thigh = volume(f, look.pants);
+  // A shin a shade off the thigh is all it takes for a knee to read at this size.
+  const shin = volume(f, shade(look.pants, 1.07));
+  const shoe = volume(f, '#42332a');
+  const u = side * LEG_U;
 
-    // Shoes, with a darker sole so feet read against the floor.
-    for (const [x, near] of [
-      [0.5 * s - stride * 2, 0],
-      [-6 * s + stride * 2, 1],
-    ] as const) {
-      ctx.fillStyle = near ? '#4a382b' : '#3b2c22';
-      roundRect(ctx, x, legTop + 10 * s, 5.6 * s, 3.2 * s, 1.6);
-      ctx.fill();
-      ctx.fillStyle = 'rgba(20,14,10,0.45)';
-      roundRect(ctx, x, legTop + 12.4 * s, 5.6 * s, 0.9 * s, 0.45);
-      ctx.fill();
-    }
+  if (sitting) {
+    // Thighs run forward off the seat, shins drop from the knee to the floor.
+    limb(f, { u, v: 0.26, y: 0, w: 0.15, d: 0.18, h: 0.05 }, shoe);
+    limb(f, { u, v: 0.26, y: 0.04, w: 0.13, d: 0.14, h: hip - 0.16 }, shin);
+    limb(f, { u, v: 0.13, y: hip - 0.12, w: 0.15, d: 0.3, h: 0.13 }, thigh);
+    return;
   }
 
-  // ------------------------------------------------------------------ torso
-  ctx.translate(sway, 0);
-  const armSwing = opts.walking ? stride * 3 : 0;
+  const swing = side * stride;
+  // The leading foot clears the tiles, so a stride is a step and not a shuffle.
+  const raise = Math.max(0, swing) * 0.03;
+  const knee = hip - 0.2;
+  limb(f, { u, v: swing * 0.1 + 0.02, y: raise, w: 0.15, d: 0.2, h: 0.05 }, shoe);
+  limb(f, { u, v: swing * 0.09, y: raise + 0.04, w: 0.13, d: 0.14, h: knee - raise - 0.02 }, shin);
+  limb(f, { u, v: swing * 0.05, y: knee, w: 0.15, d: 0.16, h: hip - knee + 0.03 }, thigh);
+}
 
-  // Far arm, behind the body.
-  ctx.fillStyle = shirtDark;
-  if (opts.carrying) {
-    // The carrying arm is raised to hold the tray.
-    roundRect(ctx, 7.4 * s, bodyTop - 1 * s, 3.8 * s, 7.5 * s, 2);
-  } else {
-    roundRect(ctx, 7.4 * s, bodyTop + 2 * s + armSwing, 3.8 * s, 10 * s, 2);
+/**
+ * Upper arm, forearm and hand down one side. Returns the hand, so whatever is
+ * being carried can be placed on it rather than near it.
+ */
+function drawArm(
+  f: Figure,
+  look: Appearance,
+  opts: PersonOptions,
+  side: 1 | -1,
+  hip: number,
+  stride: number,
+  lean: number,
+  shirt: string,
+): Limb {
+  // Arms swing against the leg on the same side. The near arm is the one that
+  // carries, so a tray is always on the side the camera can see.
+  const swing = -side * stride;
+  const carrying = side === 1 && !!opts.carrying;
+  const u = side * ARM_U;
+
+  const upper: Limb = { u, v: swing * 0.06 + lean * 0.6, y: hip + 0.14, w: 0.12, d: 0.14, h: 0.22 };
+  let fore: Limb = { u, v: swing * 0.12 + lean * 0.5, y: hip - 0.02, w: 0.11, d: 0.13, h: 0.2 };
+  let hand: Limb = { u, v: swing * 0.14 + lean * 0.5, y: hip - 0.1, w: 0.12, d: 0.12, h: 0.09 };
+  if (carrying) {
+    // Forearm up and out under the tray.
+    upper.v = 0.03 + lean;
+    upper.h = 0.24;
+    fore = { u: u * 0.92, v: 0.17, y: hip + 0.26, w: 0.11, d: 0.24, h: 0.1 };
+    hand = { u: u * 0.85, v: 0.3, y: hip + 0.24, w: 0.12, d: 0.12, h: 0.08 };
+  } else if (opts.sitting) {
+    // Forearms come forward onto the table, which is most of what tells a seated
+    // figure apart from one standing with its knees bent.
+    fore = { u: u * 0.95, v: 0.12, y: hip + 0.02, w: 0.11, d: 0.2, h: 0.1 };
+    hand = { u: u * 0.9, v: 0.25, y: hip, w: 0.12, d: 0.12, h: 0.09 };
   }
-  ctx.fill();
 
-  ctx.fillStyle = shirt;
-  roundRect(ctx, -8.2 * s, bodyTop, 16.4 * s, 13 * s, 6);
-  ctx.fill();
+  // Staff work in long sleeves; guests turn up in short ones.
+  const sleeve = volume(f, shirt);
+  limb(f, upper, sleeve);
+  limb(f, fore, opts.role ? sleeve : volume(f, look.skin));
+  // Cleaners work in rubber gloves, which is a surprisingly strong cue for which
+  // of three near-identical figures is the one wiping tables.
+  limb(f, hand, volume(f, opts.role === 'cleaner' ? '#f4c22e' : look.skin));
+  return hand;
+}
 
-  // Form shading down the shaded side and a soft highlight on the lit side.
-  ctx.fillStyle = shirtDark;
-  roundRect(ctx, 3.8 * s, bodyTop + 0.8 * s, 4.4 * s, 12 * s, 5);
-  ctx.fill();
-  ctx.fillStyle = shirtLit;
-  roundRect(ctx, -7.6 * s, bodyTop + 1.2 * s, 3.2 * s, 10.6 * s, 4);
-  ctx.fill();
+/**
+ * Hips, chest and shoulders, plus whatever the figure is wearing over them.
+ * Uniforms are garments with their own thickness standing off the chest, not a
+ * pattern painted on it, so a waistcoat still reads as worn from any angle.
+ */
+function drawTorso(
+  f: Figure,
+  look: Appearance,
+  opts: PersonOptions,
+  hip: number,
+  lean: number,
+  sway: number,
+  shirt: string,
+  trim: string,
+): void {
+  const pelvis: Limb = { u: sway * 0.5, v: lean * 0.5, y: hip - 0.06, w: 0.32, d: 0.24, h: 0.15 };
+  const torso: Limb = { u: sway, v: lean, y: hip + 0.06, w: 0.4, d: 0.26, h: 0.28 };
+  const shoulders: Limb = { u: sway, v: lean, y: hip + 0.26, w: 0.46, d: 0.28, h: 0.1 };
+  const { ctx } = f;
 
-  // Collar and hem.
-  ctx.fillStyle = trim;
-  ctx.fillRect(-8.2 * s, bodyTop + 9.6 * s, 16.4 * s, 2.2 * s);
-  if (!away) {
-    ctx.fillStyle = withAlpha(trim, 0.92);
-    ctx.beginPath();
-    ctx.moveTo(-2.6 * s, bodyTop);
-    ctx.lineTo(0, bodyTop + 5.2 * s);
-    ctx.lineTo(2.6 * s, bodyTop);
-    ctx.closePath();
-    ctx.fill();
+  limb(f, pelvis, volume(f, look.pants));
+  limb(f, torso, volume(f, shirt));
+  limb(f, shoulders, volume(f, shirt));
+
+  // Hem, across both planes the camera can see so it wraps the body.
+  for (const plane of [f.front, f.back, f.flank]) {
+    onPlane(f, torso, plane, (half, height) => {
+      ctx.fillStyle = withAlpha(trim, 0.9);
+      ctx.fillRect(-half, height - 2.2 * f.s, half * 2, 2.2 * f.s);
+    });
   }
 
-  // Uniforms. Each job gets a different garment as well as a different colour,
-  // because at phone size shape carries much further than hue.
-  if (opts.role === 'waiter') {
-    // Cherry waistcoat with cream lapels.
+  // Collar, and the same notch on the back of the neck when turned away.
+  onPlane(f, shoulders, f.front, (half, height) => {
     ctx.fillStyle = trim;
-    roundRect(ctx, -6.6 * s, bodyTop + 0.4 * s, 13.2 * s, 11.4 * s, 3.4);
-    ctx.fill();
-    ctx.fillStyle = shade(shirt, 1.02);
     ctx.beginPath();
-    ctx.moveTo(-3.4 * s, bodyTop + 0.4 * s);
-    ctx.lineTo(0, bodyTop + 6.4 * s);
-    ctx.lineTo(3.4 * s, bodyTop + 0.4 * s);
+    ctx.moveTo(-half * 0.34, 0);
+    ctx.lineTo(0, height * 0.8);
+    ctx.lineTo(half * 0.34, 0);
     ctx.closePath();
     ctx.fill();
-    ctx.fillStyle = 'rgba(255, 240, 210, 0.85)';
-    for (let i = 0; i < 2; i++) {
-      ctx.beginPath();
-      ctx.arc(0, bodyTop + (7.4 + i * 2.4) * s, 0.8 * s, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  } else if (opts.role === 'chef') {
-    // Double-breasted whites with a neckerchief.
-    ctx.fillStyle = shade(shirt, 1.03);
-    roundRect(ctx, -7 * s, bodyTop + 0.6 * s, 14 * s, 11.6 * s, 3);
-    ctx.fill();
-    ctx.fillStyle = withAlpha('#c8bda6', 0.55);
-    ctx.beginPath();
-    ctx.moveTo(2.4 * s, bodyTop + 0.6 * s);
-    ctx.lineTo(2.4 * s, bodyTop + 12.2 * s);
-    ctx.stroke();
-    ctx.fillStyle = '#d8cfbb';
-    for (let i = 0; i < 3; i++) {
-      for (const dx of [-2.6, 2.6]) {
+  });
+  onPlane(f, shoulders, f.back, (half, height) => {
+    ctx.fillStyle = withAlpha(trim, 0.8);
+    ctx.fillRect(-half * 0.4, 0, half * 0.8, height * 0.42);
+  });
+
+  if (opts.role === 'chef') {
+    // Neckerchief, knotted at the throat.
+    limb(f, { ...shoulders, y: hip + 0.36, w: 0.34, d: 0.28, h: 0.07 }, volume(f, trim));
+    onPlane(f, torso, f.front, (half, height) => {
+      // Double-breasted buttons.
+      ctx.fillStyle = '#d8cfbb';
+      for (let i = 0; i < 3; i++) {
+        for (const dx of [-0.32, 0.32]) {
+          ctx.beginPath();
+          ctx.arc(dx * half, height * (0.22 + i * 0.26), 0.75 * f.s, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+    });
+  }
+
+  if (opts.role === 'waiter' && f.front) {
+    // Waistcoat: a panel standing off the chest, with the buttons on its own face.
+    const vest: Limb = { u: torso.u, v: torso.v + 0.125, y: hip + 0.08, w: 0.32, d: 0.04, h: 0.26 };
+    limb(f, vest, volume(f, trim));
+    onPlane(f, vest, f.front, (_half, height) => {
+      ctx.fillStyle = 'rgba(255, 244, 220, 0.9)';
+      for (let i = 0; i < 2; i++) {
         ctx.beginPath();
-        ctx.arc(dx * s, bodyTop + (3 + i * 3) * s, 0.85 * s, 0, Math.PI * 2);
+        ctx.arc(0, height * (0.42 + i * 0.3), 0.7 * f.s, 0, Math.PI * 2);
         ctx.fill();
       }
-    }
-    ctx.fillStyle = trim;
-    ctx.beginPath();
-    ctx.moveTo(-4 * s, bodyTop + 0.2 * s);
-    ctx.lineTo(0, bodyTop + 4.6 * s);
-    ctx.lineTo(4 * s, bodyTop + 0.2 * s);
-    ctx.closePath();
-    ctx.fill();
+    });
   }
 
-  // Apron, for anyone in a uniform. Waiters wear a short bistro apron so the
-  // waistcoat still shows; the kitchen wears a bib.
   if (opts.uniform) {
-    const apronTop = opts.role === 'waiter' ? 7.2 : 4.6;
-    ctx.fillStyle = 'rgba(252, 249, 241, 0.93)';
-    roundRect(ctx, -5.8 * s, bodyTop + apronTop * s, 11.6 * s, (14 - apronTop) * s, 2);
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(186, 172, 150, 0.8)';
-    ctx.lineWidth = 0.9 * s;
-    ctx.beginPath();
-    ctx.moveTo(-5.8 * s, bodyTop + (apronTop + 1) * s);
-    ctx.lineTo(5.8 * s, bodyTop + (apronTop + 1) * s);
-    ctx.stroke();
+    // Aprons: a bib for the kitchen, a short bistro apron for the floor. Behind
+    // the figure there is nothing to see but the straps, so that is all we draw.
+    const bib = opts.role === 'waiter' ? 0.2 : 0.3;
+    if (f.front) {
+      const apron: Limb = {
+        u: 0,
+        v: lean + 0.15,
+        y: hip - 0.02,
+        w: 0.26,
+        d: 0.035,
+        h: bib,
+      };
+      limb(f, apron, faces('#f7f2e6'));
+      onPlane(f, apron, f.front, (half, height) => {
+        ctx.strokeStyle = 'rgba(186, 172, 150, 0.75)';
+        ctx.lineWidth = 0.9 * f.s;
+        ctx.beginPath();
+        ctx.moveTo(-half, height * 0.16);
+        ctx.lineTo(half, height * 0.16);
+        ctx.stroke();
+      });
+    } else {
+      onPlane(f, torso, f.back, (half, height) => {
+        ctx.strokeStyle = 'rgba(240, 234, 220, 0.85)';
+        ctx.lineWidth = 1.3 * f.s;
+        ctx.beginPath();
+        ctx.moveTo(-half * 0.55, height * 0.1);
+        ctx.lineTo(half * 0.55, height * 0.62);
+        ctx.moveTo(half * 0.55, height * 0.1);
+        ctx.lineTo(-half * 0.55, height * 0.62);
+        ctx.stroke();
+      });
+    }
   }
+}
 
-  // Near arm, in front of the body.
-  ctx.fillStyle = shirtLit;
-  roundRect(ctx, -11.2 * s, bodyTop + 2 * s - armSwing, 3.8 * s, 10 * s, 2);
-  ctx.fill();
+/** Neck, head, ears, hair, face and hat, in the order the camera needs them. */
+function drawHeadGroup(
+  f: Figure,
+  look: Appearance,
+  opts: PersonOptions,
+  hip: number,
+  lean: number,
+  sway: number,
+): void {
+  const skin = volume(f, look.skin);
+  // Wider than deep, so the face gets as much of the wall as the head can spare.
+  const head: Limb = {
+    u: sway * 0.6,
+    v: lean * 1.3,
+    y: hip + 0.42,
+    w: 0.46,
+    d: 0.36,
+    h: 0.32,
+  };
+  const ear = (side: 1 | -1): Limb => ({
+    u: head.u + side * 0.235,
+    v: head.v - 0.01,
+    y: head.y + 0.1,
+    w: 0.04,
+    d: 0.1,
+    h: 0.09,
+  });
 
-  // Hands. Cleaners work in rubber gloves, which is a surprisingly strong cue
-  // for which of three near-identical figures is the one wiping tables.
-  const glove = opts.role === 'cleaner' ? '#f4c22e' : null;
-  ctx.fillStyle = glove ?? look.skin;
-  ctx.beginPath();
-  ctx.arc(-9.2 * s, bodyTop + 12 * s - armSwing, glove ? 2.9 * s : 2.5 * s, 0, Math.PI * 2);
-  ctx.fill();
-  if (!opts.carrying) {
-    ctx.fillStyle = glove ? shade(glove, 0.88) : skinShade;
-    ctx.beginPath();
-    ctx.arc(9.3 * s, bodyTop + 12 * s + armSwing, glove ? 2.9 * s : 2.5 * s, 0, Math.PI * 2);
-    ctx.fill();
-  }
+  limb(f, { u: head.u, v: head.v, y: hip + 0.34, w: 0.15, d: 0.14, h: 0.09 }, skin);
+  // A jaw narrower than the head, which together with the step the hair puts on
+  // the crown is what keeps a boxy head from reading as a plain cube.
+  limb(f, { u: head.u, v: head.v, y: head.y - 0.05, w: 0.36, d: 0.28, h: 0.06 }, skin);
+  limb(f, ear(-1), skin);
+  drawHairBack(f, look, head);
+  limb(f, head, skin);
+  limb(f, ear(1), skin);
+  drawHair(f, look, head);
+  drawFace(f, look, head, opts.time);
+  if (opts.role) drawUniformHat(f, opts.role, head);
+  else drawGuestExtra(f, look, head, hip, lean);
+}
 
-  // ------------------------------------------------------------------- head
-  ctx.fillStyle = skinShade;
-  ctx.beginPath();
-  ctx.ellipse(0, headY + 8.8 * s, 4 * s, 2.2 * s, 0, 0, Math.PI * 2);
-  ctx.fill();
-
-  ctx.fillStyle = look.skin;
-  ctx.beginPath();
-  ctx.arc(0, headY, headR, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Cheek shading on the away side, and ears.
-  ctx.fillStyle = withAlpha(skinShade, 0.75);
-  ctx.beginPath();
-  ctx.arc(3.4 * s, headY + 0.6 * s, headR * 0.72, -Math.PI * 0.45, Math.PI * 0.45);
-  ctx.fill();
-  ctx.fillStyle = skinShade;
-  ctx.beginPath();
-  ctx.ellipse(-headR * 0.96, headY + 0.8 * s, 1.5 * s, 2.1 * s, 0, 0, Math.PI * 2);
-  ctx.ellipse(headR * 0.96, headY + 0.8 * s, 1.5 * s, 2.1 * s, 0, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Outline just the head, which is enough to lift the figure off the floor.
-  ctx.strokeStyle = ink;
-  ctx.lineWidth = 0.9 * s;
-  ctx.beginPath();
-  ctx.arc(0, headY, headR, 0, Math.PI * 2);
-  ctx.stroke();
-
-  drawHair(ctx, look, headY, s, away);
-  if (!away) drawFace(ctx, look, headY, s, opts.time);
-  if (opts.role) drawUniformHat(ctx, opts.role, headY, s, away);
-  else drawGuestExtra(ctx, look, headY, s, away);
-
-  // Props
+/** Whatever is in the near hand, placed on it. */
+function drawHeld(f: Figure, opts: PersonOptions, hand: Limb): void {
+  const { ctx } = f;
   if (opts.carrying) {
+    const at = spot(f, hand.u, hand.v, hand.y + hand.h);
     ctx.save();
-    ctx.translate(11 * s, bodyTop - 2 * s);
-    // Undo the body mirror so plated food is never drawn back-to-front.
-    if (flip) ctx.scale(-1, 1);
+    ctx.translate(at.x, at.y - 1 * f.s);
+    ctx.scale(f.s, f.s);
     drawTray(ctx, opts.carrying);
     ctx.restore();
-  } else if (opts.prop === 'notepad') {
-    ctx.fillStyle = '#fdf8ec';
-    roundRect(ctx, 8 * s, bodyTop + 8 * s, 7 * s, 8 * s, 1);
-    ctx.fill();
-    ctx.strokeStyle = '#b9ad95';
+    return;
+  }
+  if (opts.prop === 'notepad') {
+    const pad: Limb = { u: hand.u * 0.9, v: hand.v + 0.14, y: hand.y + 0.06, w: 0.17, d: 0.14, h: 0.03 };
+    limb(f, pad, faces('#fdf8ec'));
+    const at = spot(f, pad.u, pad.v, pad.y + pad.h);
+    ctx.strokeStyle = 'rgba(160, 148, 128, 0.9)';
     ctx.lineWidth = 0.8;
-    for (let i = 1; i < 4; i++) {
+    for (let i = -1; i <= 1; i++) {
       ctx.beginPath();
-      ctx.moveTo(9 * s, bodyTop + (8 + i * 1.8) * s);
-      ctx.lineTo(14 * s, bodyTop + (8 + i * 1.8) * s);
+      ctx.moveTo(at.x - 5 * f.s, at.y + i * 2.4 * f.s + 1.2 * f.s);
+      ctx.lineTo(at.x + 5 * f.s, at.y + i * 2.4 * f.s - 1.2 * f.s);
       ctx.stroke();
     }
   } else if (opts.prop === 'cloth') {
-    ctx.fillStyle = '#8fd0e8';
-    roundRect(ctx, 8 * s, bodyTop + 9 * s, 8 * s, 6 * s, 2);
-    ctx.fill();
+    limb(
+      f,
+      { u: hand.u * 1.05, v: hand.v + 0.12, y: hand.y - 0.02, w: 0.18, d: 0.16, h: 0.04 },
+      faces('#8fd0e8'),
+    );
   } else if (opts.prop === 'pan') {
-    ctx.fillStyle = '#4a4f55';
-    roundRect(ctx, 7 * s, bodyTop + 9 * s, 11 * s, 3 * s, 1.4);
-    ctx.fill();
+    const at = spot(f, hand.u * 0.9, hand.v + 0.2, hand.y + 0.06);
+    isoCylinder(ctx, at.x, at.y, 0.2 * f.s, 0.06 * f.s, '#4a4f55');
+    ctx.strokeStyle = '#37393d';
+    ctx.lineWidth = 2 * f.s;
+    const grip = spot(f, hand.u, hand.v, hand.y + 0.05);
     ctx.beginPath();
-    ctx.ellipse(9 * s, bodyTop + 10 * s, 5 * s, 3 * s, 0, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.moveTo(grip.x, grip.y);
+    ctx.lineTo(at.x, at.y - 1 * f.s);
+    ctx.stroke();
   }
-
-  ctx.restore();
 }
 
 /** Grain lines across a table top, clipped to the surface. */
@@ -1019,142 +1201,132 @@ function wearsGlasses(look: Appearance): boolean {
   return hashString(look.skin + look.hair + look.shirt) % 5 === 0;
 }
 
-/** Eyes, brows, blush and mouth. Only drawn when the face is towards the camera. */
-function drawFace(
-  ctx: CanvasRenderingContext2D,
-  look: Appearance,
-  headY: number,
-  s: number,
-  time: number,
-): void {
-  const eyeY = headY - 0.4 * s;
-  const dx = 3.6 * s;
-  // Each figure gets a different `time` offset, so blinks never synchronise.
-  const blinking = (time * 0.31) % 1 < 0.05;
+/**
+ * Eyes, brows, blush and mouth, painted onto the plane of the head the figure is
+ * facing along. Nothing is drawn at all on the two away facings, where that
+ * plane is pointing away from the camera.
+ */
+function drawFace(f: Figure, look: Appearance, head: Limb, time: number): void {
+  onPlane(f, head, f.front, (half, height) => {
+    const { ctx } = f;
+    const dx = half * 0.46;
+    const eyeY = height * 0.46;
+    // Each figure gets a different `time` offset, so blinks never synchronise.
+    const blinking = (time * 0.31) % 1 < 0.05;
 
-  ctx.save();
-  ctx.lineCap = 'round';
+    ctx.lineCap = 'round';
+    if (blinking) {
+      ctx.strokeStyle = '#3a2b21';
+      ctx.lineWidth = 1.2 * f.s;
+      ctx.beginPath();
+      ctx.moveTo(-dx - half * 0.24, eyeY);
+      ctx.lineTo(-dx + half * 0.24, eyeY);
+      ctx.moveTo(dx - half * 0.24, eyeY);
+      ctx.lineTo(dx + half * 0.24, eyeY);
+      ctx.stroke();
+    } else {
+      ctx.fillStyle = '#fbf7ef';
+      ctx.beginPath();
+      ctx.ellipse(-dx, eyeY, half * 0.28, height * 0.19, 0, 0, Math.PI * 2);
+      ctx.ellipse(dx, eyeY, half * 0.28, height * 0.19, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#2b2118';
+      ctx.beginPath();
+      ctx.arc(-dx + half * 0.05, eyeY + height * 0.02, half * 0.17, 0, Math.PI * 2);
+      ctx.arc(dx + half * 0.05, eyeY + height * 0.02, half * 0.17, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,0.92)';
+      ctx.beginPath();
+      ctx.arc(-dx - half * 0.07, eyeY - height * 0.07, half * 0.075, 0, Math.PI * 2);
+      ctx.arc(dx - half * 0.07, eyeY - height * 0.07, half * 0.075, 0, Math.PI * 2);
+      ctx.fill();
+    }
 
-  if (blinking) {
-    ctx.strokeStyle = '#3a2b21';
-    ctx.lineWidth = 1.2 * s;
+    ctx.strokeStyle = shade(look.hair, 0.7);
+    ctx.lineWidth = 1.1 * f.s;
     ctx.beginPath();
-    ctx.moveTo(-dx - 1.9 * s, eyeY);
-    ctx.lineTo(-dx + 1.9 * s, eyeY);
-    ctx.moveTo(dx - 1.9 * s, eyeY);
-    ctx.lineTo(dx + 1.9 * s, eyeY);
+    ctx.moveTo(-dx - half * 0.26, eyeY - height * 0.19);
+    ctx.lineTo(-dx + half * 0.22, eyeY - height * 0.23);
+    ctx.moveTo(dx - half * 0.22, eyeY - height * 0.23);
+    ctx.lineTo(dx + half * 0.26, eyeY - height * 0.19);
     ctx.stroke();
-  } else {
-    ctx.fillStyle = '#fbf7ef';
+
+    ctx.fillStyle = withAlpha('#e87a7a', 0.4);
     ctx.beginPath();
-    ctx.ellipse(-dx, eyeY, 2.3 * s, 2.5 * s, 0, 0, Math.PI * 2);
-    ctx.ellipse(dx, eyeY, 2.3 * s, 2.5 * s, 0, 0, Math.PI * 2);
+    ctx.ellipse(-half * 0.76, eyeY + height * 0.2, half * 0.22, height * 0.09, 0, 0, Math.PI * 2);
+    ctx.ellipse(half * 0.76, eyeY + height * 0.2, half * 0.22, height * 0.09, 0, 0, Math.PI * 2);
     ctx.fill();
-    ctx.fillStyle = '#2b2118';
+
+    ctx.strokeStyle = 'rgba(80, 40, 30, 0.85)';
+    ctx.lineWidth = 1.2 * f.s;
     ctx.beginPath();
-    ctx.arc(-dx + 0.3 * s, eyeY + 0.25 * s, 1.4 * s, 0, Math.PI * 2);
-    ctx.arc(dx + 0.3 * s, eyeY + 0.25 * s, 1.4 * s, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = 'rgba(255,255,255,0.92)';
-    ctx.beginPath();
-    ctx.arc(-dx - 0.45 * s, eyeY - 0.75 * s, 0.55 * s, 0, Math.PI * 2);
-    ctx.arc(dx - 0.45 * s, eyeY - 0.75 * s, 0.55 * s, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  ctx.strokeStyle = shade(look.hair, 0.7);
-  ctx.lineWidth = 1.15 * s;
-  ctx.beginPath();
-  ctx.moveTo(-dx - 2 * s, eyeY - 4.2 * s);
-  ctx.lineTo(-dx + 1.8 * s, eyeY - 4.8 * s);
-  ctx.moveTo(dx - 1.8 * s, eyeY - 4.8 * s);
-  ctx.lineTo(dx + 2 * s, eyeY - 4.2 * s);
-  ctx.stroke();
-
-  ctx.fillStyle = withAlpha('#e87a7a', 0.4);
-  ctx.beginPath();
-  ctx.ellipse(-5.8 * s, eyeY + 3.8 * s, 2.5 * s, 1.5 * s, 0, 0, Math.PI * 2);
-  ctx.ellipse(5.8 * s, eyeY + 3.8 * s, 2.5 * s, 1.5 * s, 0, 0, Math.PI * 2);
-  ctx.fill();
-
-  ctx.strokeStyle = 'rgba(80, 40, 30, 0.8)';
-  ctx.lineWidth = 1.25 * s;
-  ctx.beginPath();
-  ctx.arc(0, headY + 2.6 * s, 3.2 * s, 0.18 * Math.PI, 0.82 * Math.PI);
-  ctx.stroke();
-
-  if (wearsGlasses(look)) {
-    ctx.strokeStyle = 'rgba(58, 46, 38, 0.9)';
-    ctx.lineWidth = 0.9 * s;
-    ctx.beginPath();
-    ctx.arc(-dx, eyeY, 3.4 * s, 0, Math.PI * 2);
-    ctx.arc(dx, eyeY, 3.4 * s, 0, Math.PI * 2);
-    ctx.moveTo(-dx + 3.4 * s, eyeY);
-    ctx.lineTo(dx - 3.4 * s, eyeY);
+    ctx.arc(0, eyeY + height * 0.2, half * 0.4, 0.15 * Math.PI, 0.85 * Math.PI);
     ctx.stroke();
-  }
 
-  ctx.restore();
+    if (wearsGlasses(look)) {
+      ctx.strokeStyle = 'rgba(58, 46, 38, 0.9)';
+      ctx.lineWidth = 0.9 * f.s;
+      ctx.beginPath();
+      ctx.arc(-dx, eyeY, half * 0.42, 0, Math.PI * 2);
+      ctx.arc(dx, eyeY, half * 0.42, 0, Math.PI * 2);
+      ctx.moveTo(-dx + half * 0.42, eyeY);
+      ctx.lineTo(dx - half * 0.42, eyeY);
+      ctx.stroke();
+    }
+  });
 }
 
 /**
- * Headgear by job. Silhouette does the work here: a tall toque, a peaked cap and
- * a knotted bandana are all still telling you who is who when the whole figure
- * is thirty pixels high.
+ * Headgear by job, built as its own little volume on the crown. Silhouette does
+ * the work: a tall toque, a peaked cap and a low bandana still tell you who is
+ * who from across the room, and from behind, where no uniform is in view.
  */
-function drawUniformHat(
-  ctx: CanvasRenderingContext2D,
-  role: 'waiter' | 'chef' | 'cleaner',
-  headY: number,
-  s: number,
-  away: boolean,
-): void {
+function drawUniformHat(f: Figure, role: 'waiter' | 'chef' | 'cleaner', head: Limb): void {
+  const crown = head.y + head.h;
+  const { ctx } = f;
+
   switch (role) {
     case 'chef': {
-      const brimY = headY - 8.4 * s;
-      ctx.fillStyle = '#fffdf8';
-      roundRect(ctx, -7.6 * s, brimY - 13 * s, 15.2 * s, 14 * s, 5.6 * s);
-      ctx.fill();
-      // Pleats in the crown, and a shaded side so it is not a white blob.
-      ctx.fillStyle = withAlpha('#ddd3c0', 0.65);
-      roundRect(ctx, 3.2 * s, brimY - 12.4 * s, 4 * s, 12.6 * s, 3.4 * s);
-      ctx.fill();
-      ctx.fillStyle = '#fffefb';
-      roundRect(ctx, -8.8 * s, brimY - 1.4 * s, 17.6 * s, 5 * s, 2 * s);
-      ctx.fill();
-      ctx.strokeStyle = withAlpha('#c9bfa9', 0.8);
-      ctx.lineWidth = 0.9 * s;
-      ctx.beginPath();
-      ctx.moveTo(-8.8 * s, brimY + 3 * s);
-      ctx.lineTo(8.8 * s, brimY + 3 * s);
-      ctx.stroke();
+      const band: Limb = { u: head.u, v: head.v, y: crown - 0.05, w: 0.5, d: 0.4, h: 0.09 };
+      limb(f, band, faces('#fffdf8'));
+      const at = spot(f, head.u, head.v, crown + 0.04);
+      isoCylinder(ctx, at.x, at.y, 0.26 * f.s, 0.2 * f.s, '#fdf9ef');
+      // A wider puff over the pleats, which is what makes a toque a toque.
+      isoEllipse(ctx, at.x, at.y - 0.2 * f.s * TILE_Z, 0.3 * f.s, '#fffefb');
       break;
     }
     case 'waiter': {
-      // Pillbox cap, cocked to one side.
-      ctx.fillStyle = '#c73a2e';
-      roundRect(ctx, -8.4 * s, headY - 13.4 * s, 13 * s, 6.4 * s, 2.6 * s);
-      ctx.fill();
-      ctx.fillStyle = '#e2564a';
-      roundRect(ctx, -8.4 * s, headY - 13.4 * s, 13 * s, 2.4 * s, 1.6 * s);
-      ctx.fill();
+      // Peaked cap: the bill is drawn first so the crown laps over its root.
+      limb(
+        f,
+        { u: head.u, v: head.v + 0.29, y: crown - 0.06, w: 0.42, d: 0.18, h: 0.035 },
+        faces('#a82f26'),
+      );
+      const cap: Limb = { u: head.u, v: head.v, y: crown - 0.07, w: 0.5, d: 0.4, h: 0.16 };
+      limb(f, cap, faces('#c73a2e'));
+      for (const plane of [f.front, f.back, f.flank]) {
+        onPlane(f, cap, plane, (half, height) => {
+          ctx.fillStyle = 'rgba(255, 232, 210, 0.5)';
+          ctx.fillRect(-half, height - 1.6 * f.s, half * 2, 1.6 * f.s);
+        });
+      }
       break;
     }
     default: {
-      // Bandana with a knot on the shaded side.
-      ctx.fillStyle = '#2f8b83';
-      ctx.beginPath();
-      ctx.arc(0, headY - 1.6 * s, 10.7 * s, Math.PI * 1.03, Math.PI * 1.97);
-      ctx.fill();
-      ctx.fillStyle = '#7ed0c4';
-      roundRect(ctx, -10.4 * s, headY - 6.4 * s, 20.8 * s, 3.4 * s, 1.6 * s);
-      ctx.fill();
-      if (!away) {
-        ctx.fillStyle = '#2f8b83';
-        ctx.beginPath();
-        ctx.arc(9.6 * s, headY - 4.6 * s, 2.6 * s, 0, Math.PI * 2);
-        ctx.fill();
+      // Bandana, wrapped low, with the knot out on the side the camera can see.
+      const wrap: Limb = { u: head.u, v: head.v, y: crown - 0.16, w: 0.49, d: 0.39, h: 0.2 };
+      limb(f, wrap, faces('#2f8b83'));
+      for (const plane of [f.front, f.back, f.flank]) {
+        onPlane(f, wrap, plane, (half, height) => {
+          ctx.fillStyle = 'rgba(126, 208, 196, 0.75)';
+          ctx.fillRect(-half, height - 2 * f.s, half * 2, 2 * f.s);
+        });
       }
+      limb(
+        f,
+        { u: head.u + 0.26, v: head.v - 0.06, y: crown - 0.15, w: 0.13, d: 0.11, h: 0.11 },
+        faces('#2a6f68'),
+      );
       break;
     }
   }
@@ -1165,95 +1337,118 @@ function drawUniformHat(
  * no save data changes. Guests wearing something the staff never wear is what
  * keeps the two crowds apart at a glance.
  */
-function drawGuestExtra(
-  ctx: CanvasRenderingContext2D,
-  look: Appearance,
-  headY: number,
-  s: number,
-  away: boolean,
-): void {
+function drawGuestExtra(f: Figure, look: Appearance, head: Limb, hip: number, lean: number): void {
   const pick = hashString(look.shirt + look.pants + look.hairStyle) % 6;
+  const crown = head.y + head.h;
+
   if (pick === 0) {
-    // Bobble hat.
-    ctx.fillStyle = look.shirt;
-    ctx.beginPath();
-    ctx.arc(0, headY - 2.6 * s, 10.9 * s, Math.PI * 1.02, Math.PI * 1.98);
-    ctx.fill();
-    ctx.fillStyle = shade(look.shirt, 1.18);
-    roundRect(ctx, -10.6 * s, headY - 7.6 * s, 21.2 * s, 3.6 * s, 1.8 * s);
-    ctx.fill();
-    ctx.fillStyle = '#fff6e4';
-    ctx.beginPath();
-    ctx.arc(0, headY - 13.8 * s, 2.8 * s, 0, Math.PI * 2);
-    ctx.fill();
-  } else if (pick === 1 && !away) {
-    // Scarf tucked under the chin.
-    ctx.fillStyle = shade(look.shirt, 0.72);
-    roundRect(ctx, -6.4 * s, headY + 8 * s, 12.8 * s, 4.2 * s, 2 * s);
-    ctx.fill();
-    ctx.fillStyle = shade(look.shirt, 0.62);
-    roundRect(ctx, 1.6 * s, headY + 10.6 * s, 3.6 * s, 6.4 * s, 1.6 * s);
-    ctx.fill();
+    // Bobble hat: turned-up brim, dome, pom-pom.
+    limb(
+      f,
+      { u: head.u, v: head.v, y: crown - 0.1, w: 0.52, d: 0.42, h: 0.15 },
+      faces(shade(look.shirt, 1.12)),
+    );
+    const at = spot(f, head.u, head.v, crown + 0.04);
+    isoCylinder(f.ctx, at.x, at.y, 0.22 * f.s, 0.12 * f.s, look.shirt);
+    f.ctx.fillStyle = '#fff6e4';
+    f.ctx.beginPath();
+    f.ctx.arc(at.x, at.y - (0.12 * f.s * TILE_Z + 2.2 * f.s), 2.6 * f.s, 0, Math.PI * 2);
+    f.ctx.fill();
+  } else if (pick === 1) {
+    // Scarf, round the neck with the tail hanging down the front.
+    limb(
+      f,
+      { u: head.u, v: head.v, y: hip + 0.32, w: 0.36, d: 0.3, h: 0.11 },
+      faces(shade(look.shirt, 0.72)),
+    );
+    if (f.front) {
+      limb(
+        f,
+        { u: head.u + 0.06, v: lean + 0.15, y: hip + 0.08, w: 0.1, d: 0.06, h: 0.24 },
+        faces(shade(look.shirt, 0.66)),
+      );
+    }
   }
 }
 
-function drawHair(
-  ctx: CanvasRenderingContext2D,
-  look: Appearance,
-  headY: number,
-  s: number,
-  away: boolean,
-): void {
-  ctx.fillStyle = look.hair;
+/**
+ * Hair that hangs behind the head, drawn before it so the head sits in front of
+ * its own hair rather than inside it.
+ */
+function drawHairBack(f: Figure, look: Appearance, head: Limb): void {
+  const crown = head.y + head.h;
+  if (look.hairStyle === 'long') {
+    // A mass a little wider than the head and deeper behind it, so the hair
+    // frames the face on both sides and falls to the shoulders at the back. It
+    // narrows on the way down rather than ending in a square hem.
+    limb(
+      f,
+      { u: head.u, v: head.v - 0.05, y: crown - 0.5, w: 0.44, d: 0.34, h: 0.26 },
+      faces(shade(look.hair, 0.94)),
+    );
+    limb(
+      f,
+      { u: head.u, v: head.v - 0.05, y: crown - 0.28, w: 0.5, d: 0.4, h: 0.28 },
+      faces(look.hair),
+    );
+  } else if (look.hairStyle === 'bun') {
+    const at = spot(f, head.u, head.v - 0.19, crown - 0.14);
+    isoCylinder(f.ctx, at.x, at.y, 0.14 * f.s, 0.15 * f.s, look.hair);
+  }
+}
+
+/**
+ * The hair on top of the head, as two slabs: a band round the skull and a
+ * narrower one above it. The step is what rounds off the crown, so a head reads
+ * as a head rather than as a cube — which is also why a bald one gets the same
+ * step in skin, with the hair painted round the back and sides instead.
+ */
+function drawHair(f: Figure, look: Appearance, head: Limb): void {
+  const crown = head.y + head.h;
+  const hair = faces(look.hair);
+  const band: Limb = { u: head.u, v: head.v, y: crown - 0.09, w: 0.48, d: 0.38, h: 0.12 };
+  const top: Limb = { u: head.u, v: head.v, y: crown + 0.01, w: 0.4, d: 0.3, h: 0.07 };
+
+  if (look.hairStyle === 'bald') {
+    limb(f, top, volume(f, look.skin));
+    for (const plane of [f.back, f.flank]) {
+      onPlane(f, head, plane, (half, height) => {
+        f.ctx.fillStyle = look.hair;
+        f.ctx.fillRect(-half, height * 0.26, half * 2, height * 0.3);
+      });
+    }
+    return;
+  }
+
   switch (look.hairStyle) {
-    case 'bald':
-      ctx.beginPath();
-      ctx.arc(0, headY - 1.8 * s, 10.4 * s, Math.PI * 1.15, Math.PI * 1.85);
-      ctx.fill();
-      break;
     case 'cap':
-      ctx.beginPath();
-      ctx.arc(0, headY - 1.2 * s, 10.8 * s, Math.PI, 0);
-      ctx.fill();
-      ctx.fillStyle = shade(look.hair, 0.75);
-      ctx.beginPath();
-      ctx.ellipse(away ? 0 : 5 * s, headY - 1.1 * s, 10 * s, 2.6 * s, 0, 0, Math.PI * 2);
-      ctx.fill();
+      // A flat, wide crop with no step, which reads as a blunt fringe.
+      limb(f, { ...band, w: 0.52, d: 0.42, h: 0.16 }, hair);
       break;
-    case 'bun':
-      ctx.beginPath();
-      ctx.arc(0, headY - 0.6 * s, 10.8 * s, Math.PI, 0);
-      ctx.fill();
-      ctx.beginPath();
-      ctx.arc(-7.2 * s, headY - 10 * s, 4.6 * s, 0, Math.PI * 2);
-      ctx.fill();
-      break;
-    case 'long':
-      ctx.beginPath();
-      ctx.ellipse(0, headY + 1.4 * s, 11.4 * s, 12.2 * s, 0, Math.PI, 0);
-      ctx.fill();
-      ctx.beginPath();
-      roundRect(ctx, -11.2 * s, headY - 1 * s, 3.8 * s, 14 * s, 2);
-      ctx.fill();
-      ctx.beginPath();
-      roundRect(ctx, 7.4 * s, headY - 1 * s, 3.8 * s, 14 * s, 2);
-      ctx.fill();
-      break;
-    case 'curly':
-      for (let i = 0; i < 6; i++) {
-        const a = Math.PI + (i / 5) * Math.PI;
-        ctx.beginPath();
-        ctx.arc(Math.cos(a) * 8.6 * s, headY + Math.sin(a) * 8.6 * s, 4.2 * s, 0, Math.PI * 2);
-        ctx.fill();
+    case 'curly': {
+      limb(f, band, hair);
+      // Curls round the crown, far side first so the near ones lap over them.
+      // None of them stray forward over the face.
+      const curls: Array<[number, number]> = [
+        [-0.2, -0.1],
+        [-0.14, 0.09],
+        [0, -0.14],
+        [0.06, 0.1],
+        [0.2, -0.05],
+      ];
+      for (const [u, v] of curls) {
+        limb(
+          f,
+          { u: head.u + u, v: head.v + v, y: crown - 0.02, w: 0.15, d: 0.14, h: 0.11 },
+          faces(shade(look.hair, u > 0 ? 1.07 : 0.93)),
+        );
       }
       break;
+    }
     default:
-      ctx.beginPath();
-      ctx.arc(0, headY - 1.0 * s, 10.8 * s, Math.PI * 1.02, Math.PI * 1.98);
-      ctx.fill();
-      ctx.beginPath();
-      roundRect(ctx, -10.6 * s, headY - 2.6 * s, 3.4 * s, 5.2 * s, 1.6);
-      ctx.fill();
+      // Short, bun and long all share the same stepped crown.
+      limb(f, band, hair);
+      limb(f, top, hair);
       break;
   }
 }

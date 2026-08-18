@@ -43,7 +43,7 @@ export function personIcon(
 ): HTMLCanvasElement {
   const { canvas, ctx } = makeCanvas(size, size);
   ctx.save();
-  ctx.translate(size / 2, size * 0.97);
+  ctx.translate(size / 2, size * 0.9);
   // Room for a chef's hat: the tallest thing a figure can be wearing decides how
   // big the figure itself can be drawn in a fixed-size card.
   const s = size / 64;
