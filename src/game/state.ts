@@ -467,7 +467,15 @@ function migrate(data: SaveData): SaveData {
   merged.marketStock = { ...fresh.marketStock, ...(data.marketStock ?? {}) };
   merged.dishXp = { ...(data.dishXp ?? {}) };
   merged.menu = Array.isArray(data.menu) ? data.menu.filter((id) => DISHES_BY_ID[id]) : fresh.menu;
-  merged.placed = (data.placed ?? []).filter((p) => FURNITURE_BY_ID[p.defId]);
+  // Plates hold order ids, but orders are session-only and are never written to
+  // the save, so every id that comes back from disk points at nothing. Left in
+  // place they are unreachable — only `releaseOrderHold` clears a plate and it
+  // needs a live order — so they permanently mark a stove as busy and eat counter
+  // slots, which stalls the kitchen. Drop them all and keep the rest of the
+  // furniture's state, including whether a table is still dirty.
+  merged.placed = (data.placed ?? [])
+    .filter((p) => FURNITURE_BY_ID[p.defId])
+    .map(({ plates: _cleared, ...rest }) => rest);
   merged.staff = (data.staff ?? []).map((s) => ({
     ...s,
     path: [],
