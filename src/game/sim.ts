@@ -1,12 +1,13 @@
 import { clamp } from '../engine/iso';
-import { audio } from '../engine/audio';
+import { audio, type SfxName } from '../engine/audio';
 import { DISHES_BY_ID, dishCookTime, dishPrice } from './data/dishes';
 import type { FurnitureDef } from './data/furniture';
-import { INGREDIENT_LIST } from './data/ingredients';
+import { INGREDIENTS, INGREDIENT_LIST } from './data/ingredients';
 import { REGULARS_BY_ID } from './data/regulars';
 import { Grid } from './grid';
 import { advanceAlongPath, findPath } from './path';
 import { appearanceFrom, randomName, workSpeed } from './people';
+import { DAY_LENGTH } from './progression';
 import { buildDayRecap, emptyLedger } from './recap';
 import {
   nextVisitDelay,
@@ -71,6 +72,8 @@ export class Simulation {
   readonly grid: Grid;
   private spawnTimer = 0;
   private lastDay = 1;
+  /** Set while fast-forwarding a missed shift, so a whole day is not replayed as noise. */
+  private quiet = false;
 
   constructor(private readonly game: Game) {
     this.grid = new Grid(game);
@@ -81,8 +84,22 @@ export class Simulation {
     }
   }
 
+  /** One sound, unless the player muted it or nobody is watching. */
+  private sound(name: SfxName): void {
+    if (this.quiet || this.game.data.settings.muted) return;
+    audio.play(name);
+  }
+
   update(realDt: number): void {
-    const dt = realDt * this.game.data.settings.speed;
+    this.step(realDt * this.game.data.settings.speed, realDt);
+  }
+
+  /**
+   * Advance the world by `dt` in-game seconds. `realDt` drives only the parts
+   * that should run on wall-clock time however fast the world is going, which is
+   * why fast-forward does not turn the celebrations into a blur.
+   */
+  private step(dt: number, realDt: number): void {
     this.grid.sync();
 
     this.game.data.clock += dt;
@@ -94,8 +111,6 @@ export class Simulation {
     for (const c of [...this.game.customers]) this.updateCustomer(c, dt);
     for (const s of this.game.data.staff) this.updateStaff(s, dt);
     this.updateFloaters(realDt);
-    // Decoration runs on wall-clock time, so fast-forward does not turn the
-    // celebrations into a blur.
     this.game.fx.update(realDt);
   }
 
@@ -392,7 +407,7 @@ export class Simulation {
     this.game.recordSatisfaction(0.05);
     this.game.addFloater(reason, c.tx, c.ty, 'bad');
     this.game.fx.puff(c.tx, c.ty, '#c6a493');
-    if (!this.game.data.settings.muted) audio.play('unhappy');
+    this.sound('unhappy');
     if (c.regularId !== null) this.snubRegular(c);
     this.cancelOrderFor(c);
     if (c.tableUid !== null) {
@@ -423,7 +438,7 @@ export class Simulation {
       this.game.data.today.covers++;
       this.game.data.today.dishEarnings += paid;
       this.game.fx.coins(c.tx, c.ty, paid / 60);
-      if (!this.game.data.settings.muted) audio.play('coin');
+      this.sound('coin');
     }
 
     c.satisfaction = 0.25 + 0.75 * c.patience;
@@ -469,7 +484,7 @@ export class Simulation {
       this.game.fx.coins(c.tx, c.ty, tip / 40);
       this.game.data.today.tips += tip;
       this.game.data.today.regularsDelighted++;
-      if (!this.game.data.settings.muted) audio.play('bell');
+      this.sound('bell');
     }
 
     state.nextVisitAt =
@@ -1071,9 +1086,7 @@ export class Simulation {
     const rate = ((def?.speed ?? 1) * workSpeed(s)) / order.cookSeconds;
     const before = order.progress;
     order.progress = Math.min(1, order.progress + rate * dt);
-    if (before < 0.5 && order.progress >= 0.5 && !this.game.data.settings.muted) {
-      audio.play('sizzle');
-    }
+    if (before < 0.5 && order.progress >= 0.5) this.sound('sizzle');
     if (order.progress < 1) return;
 
     order.state = 'ready';
@@ -1082,7 +1095,7 @@ export class Simulation {
     if (levelled) {
       const dish = DISHES_BY_ID[order.dishId]!;
       this.game.addFloater(`${dish.name} Lv${this.game.dishLevel(order.dishId)}!`, s.tx, s.ty - 0.5, 'xp');
-      if (!this.game.data.settings.muted) audio.play('bell');
+      this.sound('bell');
     }
 
     // Park the plate on a counter if one is free, otherwise it blocks the stove.
@@ -1264,45 +1277,153 @@ export class Simulation {
     this.resetStaff(s);
   }
 
-  // ------------------------------------------------------- offline catch-up
+  // ---------------------------------------------------------- the shift away
+
+  /*
+   * What the diner did while the tab was shut.
+   *
+   * This used to be a formula: guess a cover count, multiply by an average price,
+   * hand over the coins and the experience. Nothing was cooked, so no stock was
+   * used; the clock never moved, so no day ended and no wages were ever drawn.
+   * Time away was pure profit at no cost, which made shutting the tab a strategy.
+   *
+   * So there is no formula any more. The team works the shift for real, through
+   * the same code a watched shift runs through: guests arrive, recipes come out
+   * of the pantry, the day ends and payroll comes out of the till. What the
+   * player is credited with is *time*, and only a little of it — a full night
+   * away buys one in-game day, which is the most that can pass without skipping
+   * a payroll or burying one day's card under the next.
+   */
+
+  /** Time away that buys the whole catch-up. Longer absences are paid the same. */
+  private static readonly AWAY_WINDOW = 8 * 3600;
+
+  /** Ceiling on the catch-up: one in-game day, so exactly one payroll can fall due. */
+  private static readonly AWAY_CREDIT = DAY_LENGTH;
+
+  /** Below this there is no shift worth running, and the room is left untouched. */
+  private static readonly AWAY_MINIMUM = 30;
 
   /**
-   * Approximate what the restaurant earned while the tab was closed. Deliberately
-   * conservative: capped at 8 hours and paid at a fraction of live throughput, so
-   * idling is a nice bonus rather than the best way to play.
+   * Work the shift the player missed, if there was one, and report what it came
+   * to. Returns null when nothing happened, which includes a diner that could
+   * not have opened at all: a shut door, no seats, no kitchen or an empty pantry
+   * earns nothing rather than a gift.
    */
-  estimateOfflineEarnings(elapsedSeconds: number): {
-    seconds: number;
-    coins: number;
-    xp: number;
-  } {
-    const seconds = Math.max(0, Math.min(elapsedSeconds, 8 * 3600));
-    if (seconds < 120 || !this.game.data.open) return { seconds, coins: 0, xp: 0 };
+  catchUpWhileAway(elapsedSeconds: number): TimeAwayReport | null {
+    if (!Number.isFinite(elapsedSeconds)) return null;
+    const credit =
+      Simulation.AWAY_CREDIT * clamp(elapsedSeconds / Simulation.AWAY_WINDOW, 0, 1);
+    if (credit < Simulation.AWAY_MINIMUM || !this.couldHaveTraded()) return null;
 
-    this.grid.sync();
-    const seats = this.grid.usableSeats().length;
-    const stoves = this.game.placedWithRole('stove').length;
-    const waiters = this.game.staffByRole('waiter').length;
-    const chefs = this.game.staffByRole('chef').length;
-    if (!seats || !stoves || !waiters || !chefs) return { seconds, coins: 0, xp: 0 };
+    const d = this.game.data;
+    const before = {
+      coins: d.coins,
+      earned: d.stats.totalEarned,
+      spent: d.stats.totalSpent,
+      covers: d.stats.customersServed,
+      walkouts: d.stats.customersLost,
+      xp: d.xp,
+      stock: this.pantryWorth(),
+      day: this.game.dayNumber,
+    };
 
-    const cookable = this.game.data.menu.filter((id) => this.game.canCook(id));
-    if (!cookable.length) return { seconds, coins: 0, xp: 0 };
+    // Coarser than a rendered frame but well inside what 3x speed already feeds
+    // the sim, which keeps a whole day down to a few thousand steps.
+    const step = 1 / 10;
+    let traded = 0;
+    let pantryRanDry = false;
+    this.quiet = true;
+    try {
+      while (traded < credit) {
+        const dt = Math.min(step, credit - traded);
+        this.step(dt, dt);
+        traded += dt;
+        // Nobody can serve what the pantry has not got, so the team locks up
+        // rather than working an empty kitchen into a queue of walkouts.
+        if (!this.game.menuCanCook()) {
+          pantryRanDry = true;
+          break;
+        }
+      }
+    } finally {
+      this.quiet = false;
+    }
 
-    const avgPrice =
-      cookable.reduce((sum, id) => {
-        const dish = DISHES_BY_ID[id]!;
-        return sum + dishPrice(dish, this.game.dishLevel(id));
-      }, 0) / cookable.length;
+    // The coins and suds belong to a shift nobody watched, so the room comes
+    // back as it was left rather than mid-celebration.
+    this.game.floaters = [];
+    this.game.fx.clear();
 
-    // One cover roughly every 45s per seat, throttled by kitchen and floor staff.
-    const seatThroughput = seats / 45;
-    const kitchenThroughput = (stoves * chefs) / 26;
-    const floorThroughput = waiters / 12;
-    const covers = Math.min(seatThroughput, kitchenThroughput, floorThroughput) * seconds * 0.4;
-
-    const coins = Math.floor(covers * avgPrice * 0.75);
-    const xp = Math.floor(covers * 7);
-    return { seconds, coins, xp };
+    const report: TimeAwayReport = {
+      awaySeconds: Math.max(0, elapsedSeconds),
+      tradedSeconds: traded,
+      covers: d.stats.customersServed - before.covers,
+      walkouts: d.stats.customersLost - before.walkouts,
+      takings: d.stats.totalEarned - before.earned,
+      // Nothing but payroll spends from the till without the player asking.
+      wages: d.stats.totalSpent - before.spent,
+      ingredients: Math.max(0, before.stock - this.pantryWorth()),
+      coins: d.coins - before.coins,
+      xp: d.xp - before.xp,
+      daysRolled: this.game.dayNumber - before.day,
+      pantryRanDry,
+    };
+    this.game.touch();
+    // A shift that neither served anybody nor cost anything is not worth a card.
+    if (report.covers === 0 && report.wages === 0) return null;
+    return report;
   }
+
+  /** Whether the diner could have opened its doors and served at all. */
+  private couldHaveTraded(): boolean {
+    if (!this.game.data.open) return false;
+    this.grid.sync();
+    return (
+      this.grid.usableSeats().length > 0 &&
+      this.game.placedWithRole('stove').length > 0 &&
+      this.game.staffByRole('waiter').length > 0 &&
+      this.game.staffByRole('chef').length > 0 &&
+      this.game.menuCanCook()
+    );
+  }
+
+  /** What the pantry would cost to replace, which is what a cover really spends. */
+  private pantryWorth(): number {
+    let total = 0;
+    for (const ing of INGREDIENT_LIST) {
+      total += this.game.pantryCount(ing.id) * INGREDIENTS[ing.id].price;
+    }
+    return total;
+  }
+}
+
+/** What one unwatched shift came to, for the card shown on the way back in. */
+export interface TimeAwayReport {
+  /** How long the player was gone, for the line that says so. */
+  awaySeconds: number;
+  /** In-game seconds the team actually worked. */
+  tradedSeconds: number;
+  covers: number;
+  walkouts: number;
+  /** Coins taken over the counter, tips included. */
+  takings: number;
+  /** Payroll drawn by any day that ended while the player was gone. */
+  wages: number;
+  /** Market value of the stock the kitchen cooked with. */
+  ingredients: number;
+  /** What the till is actually up, which is takings less wages. */
+  coins: number;
+  xp: number;
+  daysRolled: number;
+  /** Set when the kitchen ran out of stock and the team locked up early. */
+  pantryRanDry: boolean;
+}
+
+/**
+ * Run the shift missed since a save was written. Kept as a function because it
+ * belongs to loading a game rather than to a session already under way.
+ */
+export function catchUpWhileAway(game: Game, elapsedSeconds: number): TimeAwayReport | null {
+  return new Simulation(game).catchUpWhileAway(elapsedSeconds);
 }

@@ -411,7 +411,7 @@ export class UI {
     });
   }
 
-  /** Rich modal used for level-ups and the offline-earnings summary. */
+  /** Rich modal used for level-ups and the card for a shift the player missed. */
   showInfoModal(
     title: string,
     lines: Array<{ label: string; value: string }>,

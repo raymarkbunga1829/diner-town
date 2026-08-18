@@ -18,14 +18,15 @@ import {
   MAX_DISH_LEVEL,
 } from '../src/game/data/dishes';
 import { FURNITURE_BY_ID } from '../src/game/data/furniture';
+import { INGREDIENTS, INGREDIENT_LIST } from '../src/game/data/ingredients';
 import { REGULARS, REGULARS_BY_ID } from '../src/game/data/regulars';
 import { Grid } from '../src/game/grid';
 import { findPath } from '../src/game/path';
 import { appearanceFrom } from '../src/game/people';
-import { DAY_LENGTH } from '../src/game/progression';
+import { DAY_LENGTH, levelForXp, xpForLevel } from '../src/game/progression';
 import { buildDayRecap, suggestNextAction } from '../src/game/recap';
 import { favouriteFor, nextVisitDelay, refreshFavourite } from '../src/game/regulars';
-import { Simulation } from '../src/game/sim';
+import { catchUpWhileAway, Simulation } from '../src/game/sim';
 import { createNewGame, Game, SAVE_KEY } from '../src/game/state';
 import type { Order, SaveData, Staff } from '../src/game/types';
 import { buildingBox } from '../src/render/renderer';
@@ -1337,6 +1338,238 @@ group('A ledger written on another day is not credited to today', () => {
   new Simulation(kept);
   check('a current ledger is left alone', kept.data.today.covers === 7);
   check('nothing was reported on load', sim !== null && game.pendingDayRecap === null);
+});
+
+// --------------------------------------------------------- the shift away
+
+/** A diner with the pantry topped up, so stock is not what limits a shift. */
+function stockedDiner(): Game {
+  const game = new Game(createNewGame());
+  for (const ing of INGREDIENT_LIST) game.data.pantry[ing.id] = 400;
+  return game;
+}
+
+function pantryWorth(game: Game): number {
+  let total = 0;
+  for (const ing of INGREDIENT_LIST) total += game.pantryCount(ing.id) * INGREDIENTS[ing.id].price;
+  return total;
+}
+
+/** Everything a shift moves, so an unwatched one can be held against a played one. */
+function shiftValue(game: Game, from: { coins: number; stock: number }): {
+  coins: number;
+  value: number;
+} {
+  const coins = game.data.coins - from.coins;
+  return { coins, value: coins - (from.stock - pantryWorth(game)) };
+}
+
+const AWAY_WINDOW = 8 * 3600;
+
+group('A shift away costs what a shift costs', () => {
+  const game = stockedDiner();
+  // Left late in the day, so the shift away has to carry the day over.
+  game.data.clock = DAY_LENGTH - 120;
+  const sim = new Simulation(game);
+  const payroll = game.data.staff.reduce((sum, s) => sum + s.wage, 0);
+  const before = { coins: game.data.coins, stock: pantryWorth(game), clock: game.data.clock };
+
+  const report = sim.catchUpWhileAway(AWAY_WINDOW);
+  check('a night away is worth reporting', report !== null);
+  if (!report) return;
+
+  check('guests were served', report.covers > 0, `${report.covers} covers`);
+  check('the till took money', report.takings > 0, `${report.takings}`);
+
+  // The two costs the old estimate never charged.
+  check('the kitchen cooked out of the pantry', report.ingredients > 0, `${report.ingredients}`);
+  check(
+    'the stock really left the pantry',
+    before.stock - pantryWorth(game) === report.ingredients,
+    `${before.stock - pantryWorth(game)} against ${report.ingredients}`,
+  );
+  check('a day ended, so wages were drawn', report.wages === payroll, `${report.wages} of ${payroll}`);
+  check(
+    'the wages came out of the till',
+    game.data.stats.totalSpent >= report.wages,
+    `${game.data.stats.totalSpent}`,
+  );
+  check(
+    'what is banked is takings less wages',
+    report.coins === report.takings - report.wages && report.coins === game.data.coins - before.coins,
+    `${report.coins} vs ${report.takings} - ${report.wages}`,
+  );
+  check('the shift was not a gift', report.coins < report.takings);
+
+  // The clock has to move, or no day can ever end while the player is away.
+  check('the clock moved on', game.data.clock > before.clock, `${before.clock} -> ${game.data.clock}`);
+  check(
+    'it moved by the shift that was worked',
+    Math.abs(game.data.clock - before.clock - report.tradedSeconds) < 0.01,
+    `${game.data.clock - before.clock} against ${report.tradedSeconds}`,
+  );
+  check('a day rolled over', report.daysRolled === 1 && game.dayNumber === 2, `day ${game.dayNumber}`);
+  check('its card is waiting', game.pendingDayRecap !== null);
+  check(
+    'the card is the day that ended',
+    game.pendingDayRecap?.day === 1 && game.pendingDayRecap?.wages === payroll,
+  );
+  // The team worked past midnight, so only the covers before it belong to the card.
+  const carded = game.data.lastRecap?.covers ?? 0;
+  check(
+    'the card counts the part of the shift that fell on that day',
+    carded > 0 && carded < report.covers,
+    `${carded} of ${report.covers}`,
+  );
+  check(
+    'the rest is on the new day, not lost',
+    game.data.today.day === 2 && game.data.today.covers === report.covers - carded,
+    `${game.data.today.covers} on day ${game.data.today.day}`,
+  );
+
+  // Nothing decorative survives a shift nobody watched.
+  check('no coins are still floating over the room', game.floaters.length === 0);
+  check('no particles were left mid-air', game.fx.particles.length === 0);
+});
+
+group('Shutting the tab cannot beat playing', () => {
+  const played = stockedDiner();
+  const sim = new Simulation(played);
+  const from = { coins: played.data.coins, stock: pantryWorth(played) };
+  const minutes = 20;
+  const step = 1 / 20;
+  for (let i = 0; i < (minutes * 60) / step; i++) sim.update(step);
+  const live = shiftValue(played, from);
+  check('twenty minutes played is worth having', live.coins > 0 && live.value > 0,
+    `coins ${live.coins}, value ${live.value}`);
+
+  /** What the longest possible absence pays, from the same diner. */
+  const awayFor = (seconds: number): { coins: number; value: number; traded: number } => {
+    const game = stockedDiner();
+    const start = { coins: game.data.coins, stock: pantryWorth(game) };
+    const report = new Simulation(game).catchUpWhileAway(seconds);
+    return { ...shiftValue(game, start), traded: report?.tradedSeconds ?? 0 };
+  };
+
+  const twenty = awayFor(20 * 60);
+  check('a twenty-minute absence changes nothing at all', twenty.traded === 0 && twenty.coins === 0);
+
+  const two = awayFor(2 * 3600);
+  const four = awayFor(4 * 3600);
+  const full = awayFor(AWAY_WINDOW);
+  const forever = awayFor(30 * 3600);
+
+  check('a longer absence is credited with more of a shift', two.traded < four.traded &&
+    four.traded < full.traded, `${two.traded}, ${four.traded}, ${full.traded}`);
+  check(
+    'no absence buys more than one in-game day',
+    full.traded <= DAY_LENGTH + 0.01 && forever.traded <= DAY_LENGTH + 0.01,
+    `${full.traded} and ${forever.traded} against ${DAY_LENGTH}`,
+  );
+
+  // The whole point: the most an absence can pay has to lose to a short sitting.
+  for (const [label, away] of [['two hours', two], ['four hours', four], ['a full night', full]] as const) {
+    check(
+      `${label} away pays less than twenty minutes played`,
+      away.coins < live.coins,
+      `${away.coins} against ${live.coins}`,
+    );
+    check(
+      `${label} away is worth less than twenty minutes played, stock included`,
+      away.value < live.value,
+      `${away.value} against ${live.value}`,
+    );
+  }
+  console.log(
+    `  (20 min played: ${live.coins} coins, ${live.value} net of stock · ` +
+      `8 hours away: ${full.coins} coins, ${full.value} net of stock)`,
+  );
+});
+
+group('A level earned while away still gets its card', () => {
+  const game = stockedDiner();
+  // One cover short of the next level, so the shift away is what crosses it.
+  game.data.xp = xpForLevel(2) - 5;
+  game.data.level = levelForXp(game.data.xp);
+  check('the diner starts below the level', game.data.level === 1, `level ${game.data.level}`);
+
+  const report = new Simulation(game).catchUpWhileAway(AWAY_WINDOW);
+  check('the shift away happened', report !== null && report.xp > 0, `${report?.xp} xp`);
+  check('it earned the level', game.data.level > 1, `level ${game.data.level}`);
+  check(
+    'the celebration is still pending',
+    game.pendingLevelUp === game.data.level,
+    `${game.pendingLevelUp} against level ${game.data.level}`,
+  );
+});
+
+group('A diner that could not have opened earns nothing', () => {
+  const broken: Array<[string, (game: Game) => void]> = [
+    ['a shut door', (game) => void (game.data.open = false)],
+    ['no seats', (game) => {
+      game.data.placed = game.data.placed.filter((p) => game.defOf(p)?.role !== 'chair');
+    }],
+    ['no stove', (game) => {
+      game.data.placed = game.data.placed.filter((p) => game.defOf(p)?.role !== 'stove');
+    }],
+    ['no chef', (game) => {
+      game.data.staff = game.data.staff.filter((s) => s.role !== 'chef');
+    }],
+    ['no waiter', (game) => {
+      game.data.staff = game.data.staff.filter((s) => s.role !== 'waiter');
+    }],
+    ['an empty pantry', (game) => void (game.data.pantry = {})],
+    ['nothing on the menu', (game) => void (game.data.menu = [])],
+  ];
+
+  for (const [label, breakIt] of broken) {
+    const game = stockedDiner();
+    breakIt(game);
+    game.touch();
+    const before = { coins: game.data.coins, clock: game.data.clock, stock: pantryWorth(game) };
+    const report = new Simulation(game).catchUpWhileAway(AWAY_WINDOW);
+    check(`${label} pays nothing`, report === null, JSON.stringify(report));
+    check(`${label} costs nothing`, game.data.coins === before.coins, `${game.data.coins}`);
+    check(`${label} leaves the pantry alone`, pantryWorth(game) === before.stock);
+    check(`${label} leaves the clock alone`, game.data.clock === before.clock);
+  }
+});
+
+group('An older save is caught up on the way in', () => {
+  const store = new Map<string, string>();
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: {
+      getItem: (k: string): string | null => store.get(k) ?? null,
+      setItem: (k: string, v: string): void => void store.set(k, v),
+      removeItem: (k: string): void => void store.delete(k),
+    },
+  });
+
+  // A save written a night ago, with the pantry a player would have left behind.
+  const before = stockedDiner();
+  before.save();
+  const stale = JSON.parse(store.get(SAVE_KEY)!) as SaveData;
+  stale.savedAt = Date.now() - AWAY_WINDOW * 1000;
+  store.set(SAVE_KEY, JSON.stringify(stale));
+
+  const loaded = Game.load();
+  check('the save reloads', loaded !== null);
+  if (!loaded) return;
+
+  const elapsed = (Date.now() - loaded.data.savedAt) / 1000;
+  check('the game can tell how long it was shut', elapsed > AWAY_WINDOW - 60, `${elapsed}s`);
+  const coins = loaded.data.coins;
+  const stock = pantryWorth(loaded);
+  const report = catchUpWhileAway(loaded, elapsed);
+  check('the missed shift is worked on load', report !== null && report.covers > 0);
+  check('with the new figures: stock was used', pantryWorth(loaded) < stock);
+  check('and the till only holds what was left over', loaded.data.coins - coins === report?.coins);
+
+  // Saving straight after is what stops the same night being paid for twice.
+  loaded.save();
+  const again = catchUpWhileAway(loaded, (Date.now() - loaded.data.savedAt) / 1000);
+  check('re-opening a moment later pays nothing more', again === null, JSON.stringify(again));
 });
 
 // ------------------------------------------------------------ job interrupts
