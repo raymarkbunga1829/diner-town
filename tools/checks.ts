@@ -1340,6 +1340,30 @@ group('A ledger written on another day is not credited to today', () => {
   check('nothing was reported on load', sim !== null && game.pendingDayRecap === null);
 });
 
+group('A frame that arrives out of order costs nothing', () => {
+  const game = new Game(createNewGame());
+  const sim = new Simulation(game);
+  const coins = game.data.coins;
+  check('a new diner opens on day one', game.dayNumber === 1 && game.data.clock === 0);
+
+  // The first animation frame can carry a timestamp from before the loop began,
+  // which used to run the clock back into the day before the diner opened and
+  // bill two days of wages against it.
+  sim.update(-0.2);
+  check('the clock did not go backwards', game.data.clock >= 0, `${game.data.clock}`);
+  check('the diner is still on day one', game.dayNumber === 1, `day ${game.dayNumber}`);
+  check('no payroll was drawn', game.data.coins === coins && game.data.stats.totalSpent === 0,
+    `${coins} -> ${game.data.coins}`);
+  check(
+    'no day was reported as over',
+    game.pendingDayRecap === null && game.data.lastRecap === null,
+    `recap ${game.data.lastRecap?.day}`,
+  );
+
+  sim.update(1);
+  check('an ordinary frame still moves the clock on', game.data.clock > 0, `${game.data.clock}`);
+});
+
 // --------------------------------------------------------- the shift away
 
 /** A diner with the pantry topped up, so stock is not what limits a shift. */
