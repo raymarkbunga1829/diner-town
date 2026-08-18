@@ -20,6 +20,7 @@ import { Grid } from '../src/game/grid';
 import { findPath } from '../src/game/path';
 import { Simulation } from '../src/game/sim';
 import { createNewGame, Game, SAVE_KEY } from '../src/game/state';
+import type { Order, Staff } from '../src/game/types';
 import { COACH_STEPS } from '../src/ui/tutorial';
 
 let failures = 0;
@@ -360,6 +361,265 @@ group("Reloading clears last shift's plates", () => {
   );
 });
 
+// ------------------------------------------------------------ job interrupts
+
+/**
+ * Drive a fresh diner until `ready` is true, so a check can act on a real
+ * in-flight order rather than a hand-built one.
+ */
+function runUntil(
+  sim: Simulation,
+  ready: () => boolean,
+  seconds = 400,
+): boolean {
+  const step = 1 / 20;
+  if (ready()) return true;
+  for (let i = 0; i < seconds * 20; i++) {
+    sim.update(step);
+    if (ready()) return true;
+  }
+  return false;
+}
+
+/** A game already in service, plus the order currently on a stove and its chef. */
+function diningWithOrderOnAStove(): {
+  game: Game;
+  sim: Simulation;
+  order: Order;
+  chef: Staff;
+} | null {
+  const game = new Game(createNewGame());
+  const sim = new Simulation(game);
+  const found = runUntil(sim, () =>
+    game.orders.some(
+      (o) =>
+        o.state === 'cooking' &&
+        o.progress > 0 &&
+        game.data.staff.some((s) => s.targetOrderId === o.id),
+    ),
+  );
+  if (!found) return null;
+  const order = game.orders.find((o) => o.state === 'cooking' && o.progress > 0)!;
+  const chef = game.data.staff.find((s) => s.targetOrderId === order.id)!;
+  return { game, sim, order, chef };
+}
+
+/**
+ * True when no stove is held by an order nobody is working on. A stove claimed
+ * by an abandoned order can never be claimed again, which is what turns one
+ * interrupted dish into a kitchen that is shut for the session.
+ */
+function stovesAreFree(game: Game): boolean {
+  return game.placedWithRole('stove').every((st) => {
+    if ((st.plates?.length ?? 0) > 0) return false;
+    const claim = game.orders.find((o) => o.stoveUid === st.uid);
+    if (!claim) return true;
+    return game.data.staff.some((s) => s.targetOrderId === claim.id && s.state === 'cooking');
+  });
+}
+
+/** No plate anywhere refers to an order that no longer exists. */
+function noGhostPlates(game: Game): boolean {
+  return game.data.placed.every((p) =>
+    (p.plates ?? []).every((id) => game.orders.some((o) => o.id === id)),
+  );
+}
+
+group('Changing a role frees the dish in the pan', () => {
+  const world = diningWithOrderOnAStove();
+  check('a dish reached a stove', world !== null);
+  if (!world) return;
+  const { game, sim, order, chef } = world;
+  const stoveUid = order.stoveUid;
+  check('the order really was on a stove', stoveUid !== null);
+
+  sim.setStaffRole(chef, 'cleaner');
+
+  check('the chef changed role', chef.role === 'cleaner');
+  check('the chef dropped the job', chef.targetOrderId === null && chef.state === 'idle');
+  check('the dish is back in the queue', order.state === 'queued', `state ${order.state}`);
+  check('the dish let go of the stove', order.stoveUid === null);
+  check('the stove is free again', stovesAreFree(game));
+  check('the guest still has their order', order.progress === 0 && game.orders.includes(order));
+
+  // Someone has to be able to pick it up again, or the guest is still stuck.
+  const cooked = game.data.stats.dishesCooked;
+  sim.setStaffRole(chef, 'chef');
+  check(
+    'another chef can cook it',
+    runUntil(sim, () => game.data.stats.dishesCooked > cooked, 200),
+    `cooked ${game.data.stats.dishesCooked}, was ${cooked}`,
+  );
+});
+
+group('Firing a chef frees the dish in the pan', () => {
+  const world = diningWithOrderOnAStove();
+  check('a dish reached a stove', world !== null);
+  if (!world) return;
+  const { game, sim, order, chef } = world;
+
+  sim.dismissStaff(chef);
+
+  check('the chef is off the payroll', !game.data.staff.some((s) => s.id === chef.id));
+  check('the dish is back in the queue', order.state === 'queued', `state ${order.state}`);
+  check('the dish let go of the stove', order.stoveUid === null);
+  check('the stove is free again', stovesAreFree(game));
+  check('nobody is still assigned to it', !game.data.staff.some((s) => s.targetOrderId === order.id));
+
+  const cooked = game.data.stats.dishesCooked;
+  const standIn = game.data.staff[0]!;
+  sim.setStaffRole(standIn, 'chef');
+  check(
+    'a replacement can cook it',
+    runUntil(sim, () => game.data.stats.dishesCooked > cooked, 200),
+    `cooked ${game.data.stats.dishesCooked}, was ${cooked}`,
+  );
+});
+
+group('Running out of energy mid-delivery puts the plate down', () => {
+  const game = new Game(createNewGame());
+  const sim = new Simulation(game);
+  const carrying = runUntil(sim, () =>
+    game.data.staff.some(
+      (s) =>
+        (s.state === 'carrying' || s.state === 'serving') &&
+        game.orders.some((o) => o.id === s.targetOrderId && o.state === 'collected'),
+    ),
+  );
+  check('a plate was picked up', carrying);
+  if (!carrying) return;
+
+  const runner = game.data.staff.find(
+    (s) => s.state === 'carrying' || s.state === 'serving',
+  )!;
+  const order = game.orders.find((o) => o.id === runner.targetOrderId)!;
+  const guest = game.customers.find((c) => c.id === order.customerId)!;
+  check('the plate is in their hands', order.state === 'collected' && order.holdingUid === null);
+
+  runner.energy = 0;
+  sim.update(1 / 20);
+
+  check('they stopped to rest', runner.state === 'exhausted');
+  check('their hands are empty', runner.carryDishId === null && runner.targetOrderId === null);
+  check('the plate is not still in limbo', order.state !== 'collected', `state ${order.state}`);
+  check(
+    'the plate is waiting on a counter',
+    order.state === 'ready' && order.holdingUid !== null,
+    `state ${order.state}, holder ${order.holdingUid}`,
+  );
+  const holder = order.holdingUid !== null ? game.placedByUid(order.holdingUid) : undefined;
+  check('the counter it is on exists', !!holder && !!holder.plates?.includes(order.id));
+  check('the guest still has an order', guest.orderId === order.id && guest.state === 'awaitingFood');
+
+  check(
+    'somebody else finishes the delivery',
+    runUntil(sim, () => guest.state !== 'awaitingFood', 120),
+    `guest ended up ${guest.state}`,
+  );
+  check('the guest was not lost', !guest.angry, `guest ended up ${guest.state}`);
+  check('no ghost plates were left behind', noGhostPlates(game));
+});
+
+group('A dropped plate with nowhere to go is recooked', () => {
+  const game = new Game(createNewGame());
+  const sim = new Simulation(game);
+  const carrying = runUntil(sim, () =>
+    game.data.staff.some(
+      (s) =>
+        (s.state === 'carrying' || s.state === 'serving') &&
+        game.orders.some((o) => o.id === s.targetOrderId && o.state === 'collected'),
+    ),
+  );
+  check('a plate was picked up', carrying);
+  if (!carrying) return;
+
+  const runner = game.data.staff.find(
+    (s) => s.state === 'carrying' || s.state === 'serving',
+  )!;
+  const order = game.orders.find((o) => o.id === runner.targetOrderId)!;
+
+  // Sell every counter out from under them, so there is no surface to use.
+  for (const counter of game.placedWithRole('counter')) sim.removeFixture(counter);
+  runner.energy = 0;
+  sim.update(1 / 20);
+
+  check('no counters are left', game.placedWithRole('counter').length === 0);
+  check('the dish went back to the kitchen', order.state === 'queued', `state ${order.state}`);
+  check('the plate is not held anywhere', order.holdingUid === null);
+  check('no ghost plates were left behind', noGhostPlates(game));
+});
+
+group('Selling a stove mid-cook does not strand the order', () => {
+  const world = diningWithOrderOnAStove();
+  check('a dish reached a stove', world !== null);
+  if (!world) return;
+  const { game, sim, order } = world;
+  const stove = game.placedByUid(order.stoveUid!)!;
+  const soldUid = stove.uid;
+  const { tx, ty } = stove;
+
+  sim.removeFixture(stove);
+
+  check('the stove is gone', game.placedByUid(soldUid) === undefined);
+  check('the dish is back in the queue', order.state === 'queued', `state ${order.state}`);
+  check(
+    'nothing points at the sold stove',
+    game.orders.every((o) => o.stoveUid !== soldUid && o.holdingUid !== soldUid),
+  );
+  check(
+    'no staff point at the sold stove',
+    game.data.staff.every((s) => s.targetUid !== soldUid),
+  );
+  check('no ghost plates were left behind', noGhostPlates(game));
+
+  // Replace the burner; the waiting order must be cookable on it.
+  const cooked = game.data.stats.dishesCooked;
+  game.data.placed.push({ uid: game.nextUid(), defId: 'stove_camp', tx, ty, rot: 0 });
+  game.touch();
+  check(
+    'the new stove picks the order up',
+    runUntil(sim, () => game.data.stats.dishesCooked > cooked, 200),
+    `cooked ${game.data.stats.dishesCooked}, was ${cooked}`,
+  );
+});
+
+group('Selling the counter under a finished plate', () => {
+  const game = new Game(createNewGame());
+  const sim = new Simulation(game);
+  const plated = runUntil(sim, () =>
+    game.orders.some((o) => {
+      if (o.state !== 'ready' || o.holdingUid === null) return false;
+      const holder = game.placedByUid(o.holdingUid);
+      return !!holder && game.defOf(holder)?.role === 'counter';
+    }),
+  );
+  check('a plate was left on the counter', plated);
+  if (!plated) return;
+
+  const order = game.orders.find((o) => o.state === 'ready' && o.holdingUid !== null)!;
+  const counter = game.placedByUid(order.holdingUid!)!;
+  const soldUid = counter.uid;
+  const guest = game.customers.find((c) => c.id === order.customerId)!;
+
+  sim.removeFixture(counter);
+
+  check('the counter is gone', game.placedByUid(soldUid) === undefined);
+  check('the plate is not on the missing counter', order.holdingUid !== soldUid);
+  const holder = order.holdingUid !== null ? game.placedByUid(order.holdingUid) : undefined;
+  check(
+    'the order is claimable again',
+    order.state === 'queued' || (order.state === 'ready' && !!holder),
+    `state ${order.state}, holder ${order.holdingUid}`,
+  );
+  check('no ghost plates were left behind', noGhostPlates(game));
+  check(
+    'the guest is still served',
+    runUntil(sim, () => guest.state !== 'awaitingFood', 160),
+    `guest ended up ${guest.state}`,
+  );
+  check('the guest was not lost', !guest.angry, `guest ended up ${guest.state}`);
+});
+
 // ---------------------------------------------------------- end-to-end service
 
 group('Service loop', () => {
@@ -390,6 +650,10 @@ group('Service loop', () => {
   );
   check('no orphaned orders', game.orders.every((o) =>
     game.customers.some((c) => c.id === o.customerId)));
+  check('every plate belongs to a live order', noGhostPlates(game));
+  check('no order holds a fixture that is gone', game.orders.every((o) =>
+    (o.stoveUid === null || !!game.placedByUid(o.stoveUid)) &&
+    (o.holdingUid === null || !!game.placedByUid(o.holdingUid))));
   check('tile constants are consistent', TILE_W === TILE_H * 2 && TILE_Z > 0);
 
   console.log(
