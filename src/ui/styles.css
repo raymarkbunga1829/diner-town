@@ -200,6 +200,13 @@ button:not(:disabled),
   gap: 8px;
   align-items: flex-start;
   flex-wrap: wrap;
+  /* The bar spans the whole width and is mostly gaps, and the queue outside the
+     door is drawn in the band behind it, so the box itself must not eat taps. */
+  pointer-events: none;
+}
+
+.topbar > * {
+  pointer-events: auto;
 }
 
 .brand-pill {
