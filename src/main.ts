@@ -20,7 +20,13 @@ import { createMarketPanel } from './ui/panels/market';
 import { createMenuPanel } from './ui/panels/menu';
 import { createShopPanel } from './ui/panels/shop';
 import { createStaffPanel } from './ui/panels/staff';
-import { COACH_STEPS } from './ui/tutorial';
+import {
+  coachAction,
+  coachProgress,
+  COACH_STEPS,
+  type CoachContext,
+  type CoachStep,
+} from './ui/tutorial';
 import { UI } from './ui/ui';
 
 const AUTOSAVE_SECONDS = 12;
@@ -248,41 +254,65 @@ class App implements AppApi {
 
   // ------------------------------------------------------------------ tutorial
 
+  /** What the coach is allowed to read. Synced, because seats are spatial. */
+  private coachContext(): CoachContext {
+    this.sim.grid.sync();
+    return { game: this.game, grid: this.sim.grid, seen: this.seen };
+  }
+
   private showCoach(): void {
     const index = this.game.data.tutorialStep;
-    if (index >= COACH_STEPS.length) {
+    if (index >= COACH_STEPS.length || this.coachHidden) {
       this.ui.hideCoach();
       return;
     }
     const step = COACH_STEPS[index]!;
-    this.ui.showCoach(step.html, step.cta ?? null, () => {
-      const mark = step.mark ?? (index === 0 ? 'intro' : 'outro');
-      this.seen.add(mark);
-      const at = step.focus?.(this.game);
-      if (at) this.focusTile(at.tx, at.ty);
-      if (step.placeIfMissing && this.game.placedWithRole('counter').length === 0) {
-        this.startPlacing(step.placeIfMissing);
-        return;
-      }
-      this.advanceCoach();
-    });
+    this.ui.showCoach(
+      step.html,
+      step.cta ?? null,
+      () => this.onCoachCta(step),
+      () => {
+        // Dismissing puts the bubble away without signing the step off; the next
+        // tip appears once the room has actually caught up with this one.
+        this.coachHidden = true;
+        this.ui.hideCoach();
+      },
+    );
   }
 
-  private advanceCoach(): void {
-    this.game.data.tutorialStep++;
+  /**
+   * Show the player the thing the tip is about. Deliberately never advances the
+   * thread on its own: a step is only finished by whatever it asks for actually
+   * happening, so "Show me" cannot be tapped through the first hour.
+   */
+  private onCoachCta(step: CoachStep): void {
+    const action = coachAction(step, this.coachContext());
+    if (action.mark) this.seen.add(action.mark);
+    if (action.sheet) this.openSheet(action.sheet.panel, action.sheet.tab);
+    else if (action.place) this.startPlacing(action.place);
+    else if (action.focus) this.focusTile(action.focus.tx, action.focus.ty);
+    this.checkCoach(true);
+  }
+
+  private advanceCoach(to: number): void {
+    this.game.data.tutorialStep = to;
+    this.coachHidden = false;
     this.game.touch();
     this.save();
     this.showCoach();
   }
 
   private coachCheck = 0;
+  /** Set when the player puts the current tip away by hand. */
+  private coachHidden = false;
 
-  private checkCoach(): void {
+  private checkCoach(immediate = false): void {
     this.coachCheck += 1;
-    if (this.coachCheck % 30 !== 0) return;
+    if (!immediate && this.coachCheck % 30 !== 0) return;
     const index = this.game.data.tutorialStep;
     if (index >= COACH_STEPS.length) return;
-    if (COACH_STEPS[index]!.done(this.game, this.seen)) this.advanceCoach();
+    const next = coachProgress(index, this.coachContext());
+    if (next !== index) this.advanceCoach(next);
   }
 
   private pantryCrisisToasted = false;

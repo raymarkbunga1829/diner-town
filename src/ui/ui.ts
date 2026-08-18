@@ -520,7 +520,17 @@ export class UI {
 
   // -------------------------------------------------------------- tutorial
 
-  showCoach(html: string, actionLabel: string | null, onAction?: () => void): void {
+  /**
+   * The onboarding tip. `onDismiss` only puts the bubble away — the thread itself
+   * moves on when the game says the step is done — so a player who would rather
+   * work it out for themselves is never left with a note they cannot close.
+   */
+  showCoach(
+    html: string,
+    actionLabel: string | null,
+    onAction?: () => void,
+    onDismiss?: () => void,
+  ): void {
     this.hideCoach();
     const btn = actionLabel
       ? el('button', {
@@ -529,10 +539,19 @@ export class UI {
           onclick: () => onAction?.(),
         })
       : null;
+    const dismiss = onDismiss
+      ? el('button', {
+          class: 'coach-x',
+          html: iconSvg('close', 12),
+          title: 'Hide this tip',
+          onclick: () => onDismiss(),
+        })
+      : null;
     this.coach = el('div', { class: 'coach' }, [
       el('span', { class: 'chef', html: iconSvg('info', 24, '#c73a2e') }),
       el('div', { class: 'txt', html }),
       btn,
+      dismiss,
     ]);
     this.root.append(this.coach);
   }
