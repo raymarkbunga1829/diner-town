@@ -91,7 +91,13 @@ export class Simulation {
   }
 
   update(realDt: number): void {
-    this.step(realDt * this.game.data.settings.speed, realDt);
+    // A browser can hand the first animation frame a timestamp from before the
+    // loop asked for one, and a step backwards from the top of a day runs the
+    // clock into the previous one — which closes that day, bills its payroll and
+    // puts up a card for it, then does it again on the way back. Time here only
+    // ever moves forwards.
+    const forward = Math.max(0, realDt);
+    this.step(forward * this.game.data.settings.speed, forward);
   }
 
   /**
