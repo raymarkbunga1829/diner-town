@@ -367,6 +367,9 @@ export class Renderer {
     const { ctx } = this;
     const { BLOCK, STREET } = Renderer;
     const view = this.visibleTiles(BLOCK);
+    // Zoomed out to survey the town there are a couple of hundred buildings on
+    // screen at once, so the buildings are told how much detail is worth drawing.
+    const zoom = this.camera.zoom;
 
     // ---- street trees and benches on the verge across the road
     for (let ty = view.minTy; ty <= view.maxTy; ty++) {
@@ -434,7 +437,8 @@ export class Renderer {
             const c = tileToWorld(cx, cy);
             out.push({
               depth: depthOf(cx, cy, height),
-              draw: () => drawShopBlock(ctx, c.x, c.y, sx, sy, height, seed + i * 17, night),
+              draw: () =>
+                drawShopBlock(ctx, c.x, c.y, sx, sy, height, seed + i * 17, night, zoom),
             });
           });
         } else if (kind === 'park' || rect.w < 2 || rect.h < 2) {
@@ -476,6 +480,7 @@ export class Renderer {
    */
   private collectTerrace(out: Drawable[], time: number, night: number): void {
     const { ctx } = this;
+    const zoom = this.camera.zoom;
     const { UNIT, TERRACE_FROM, TERRACE_TO } = Renderer;
     const size = this.grid.size;
     const depth = TERRACE_TO - TERRACE_FROM + 1;
@@ -535,7 +540,7 @@ export class Renderer {
         const height = 2.3 + tileNoise(seed + 3, seed) * 2.5;
         out.push({
           depth: depthOf(cx, cy, height),
-          draw: () => drawShopBlock(ctx, c.x, c.y, spanX, spanY, height, seed, night),
+          draw: () => drawShopBlock(ctx, c.x, c.y, spanX, spanY, height, seed, night, zoom),
         });
       }
     }

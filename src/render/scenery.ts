@@ -20,6 +20,7 @@ import {
   roundRect,
   shade,
   withAlpha,
+  type BoxColors,
   type Corner,
 } from './shapes';
 
@@ -62,6 +63,34 @@ function alpha(base: string, a: number): string {
   if (hit === undefined) {
     hit = withAlpha(base, a);
     alphaCache.set(key, hit);
+  }
+  return hit;
+}
+
+/**
+ * The same treatment for `mix` and `faces`, which the street asks for hardest:
+ * a storey of windows wants a lit tone and an unlit one, and each of them is a
+ * blend that changes only as slowly as the evening does. Two decimal places of
+ * the blend is finer than the eye, and both palettes are fixed, so the keys
+ * stop multiplying.
+ */
+const blendCache = new Map<string, string>();
+function blend(a: string, b: string, t: number): string {
+  const key = `${a}|${b}|${t.toFixed(2)}`;
+  let hit = blendCache.get(key);
+  if (hit === undefined) {
+    hit = mix(a, b, t);
+    blendCache.set(key, hit);
+  }
+  return hit;
+}
+
+const faceCache = new Map<string, BoxColors>();
+function facesOf(base: string): BoxColors {
+  let hit = faceCache.get(base);
+  if (hit === undefined) {
+    hit = faces(base);
+    faceCache.set(base, hit);
   }
   return hit;
 }
@@ -1028,10 +1057,18 @@ export function drawShopBlock(
   height: number,
   seed: number,
   night = 0,
+  /**
+   * Camera zoom, used only to decide how much detail is worth drawing. Zoomed
+   * out to survey the town there are a couple of hundred buildings on screen and
+   * a window pane is a few pixels across, so the glazing bars, course lines,
+   * shutters and felt seams cost real frame time and buy nothing.
+   */
+  zoom = 1,
 ): void {
   const plan = planStreetBuilding(spanX, spanY, height, seed);
   const { style } = plan;
   const ground = plan.storeys[0]!;
+  const fine = zoom > 0.72;
 
   // Contact shadow, sized to the footprint it belongs to.
   const reach = (ground.sx + ground.sy) / 2;
@@ -1044,7 +1081,7 @@ export function drawShopBlock(
     // Storey walls only. No lid: the storey above, or the roof, closes the top,
     // and a lid drawn here would land across the facade below.
     const wall = i === 0 ? style.wall : shade(style.wall, 1.03 - i * 0.05);
-    isoSides(ctx, cx, cy, s.sx, s.sy, s.top - s.base, faces(wall), s.base);
+    isoSides(ctx, cx, cy, s.sx, s.sy, s.top - s.base, facesOf(wall), s.base);
 
     for (const side of ['right', 'left'] as const) {
       ctx.save();
@@ -1053,10 +1090,10 @@ export function drawShopBlock(
       const lit = side === 'right' ? 1 : 0.84;
       const front = side === plan.front;
       if (i === 0) {
-        if (front) drawShopElevation(ctx, w, h, plan, lit, night);
+        if (front) drawShopElevation(ctx, w, h, plan, lit, night, fine);
         else drawFlankElevation(ctx, w, h, plan, lit, night);
       } else {
-        drawUpperElevation(ctx, w, h, plan, lit, night, i);
+        drawUpperElevation(ctx, w, h, plan, lit, night, i, fine);
       }
       ctx.restore();
     }
@@ -1076,7 +1113,7 @@ export function drawShopBlock(
     }
   });
 
-  drawRoof(ctx, cx, cy, plan, night);
+  drawRoof(ctx, cx, cy, plan, night, fine);
 }
 
 /**
@@ -1127,12 +1164,13 @@ function drawShopElevation(
   plan: BuildingPlan,
   lit: number,
   night: number,
+  fine: boolean,
 ): void {
   const { style } = plan;
   const trim = tone(style.trim, lit);
   const { sign, signH, glass, riser } = shopLayout(h);
   const pad = Math.max(3, w * 0.05);
-  const glassTone = mix(tone('#8fa9bb', lit), '#ffd89a', 0.1 + night * 0.78);
+  const glassTone = blend(tone('#8fa9bb', lit), '#ffd89a', 0.1 + night * 0.78);
 
   // Stallriser: the solid base a shopfront stands on. Without it the glazing
   // reads as a hole cut down to the pavement.
@@ -1146,34 +1184,40 @@ function drawShopElevation(
 
   ctx.fillStyle = glassTone;
   ctx.fillRect(pad, glass, paneW, -glass - riser);
-  ctx.fillStyle = alpha('#ffffff', 0.15);
-  ctx.fillRect(pad + 2, glass + 3, paneW * 0.44, (-glass - riser) * 0.32);
 
   // Glazing bars and the frame, batched into one path: a street of shops is
   // drawn every frame, so a fill per bar shows up on a phone.
-  const bays = Math.max(1, Math.round(paneW / 22));
   ctx.fillStyle = trim;
   ctx.beginPath();
-  for (let i = 1; i < bays; i++) ctx.rect(pad + (paneW / bays) * i - 1, glass, 2, -glass - riser);
+  if (fine) {
+    const bays = Math.max(1, Math.round(paneW / 22));
+    for (let i = 1; i < bays; i++) ctx.rect(pad + (paneW / bays) * i - 1, glass, 2, -glass - riser);
+  }
   ctx.rect(pad, glass, paneW, 2.4);
   ctx.rect(pad - 1.6, glass - 1.8, paneW + 3.2, 1.8);
   ctx.fill();
+  if (fine) {
+    ctx.fillStyle = alpha('#ffffff', 0.15);
+    ctx.fillRect(pad + 2, glass + 3, paneW * 0.44, (-glass - riser) * 0.32);
+  }
 
   // Door, with a fanlight over it and a handle.
   const doorX = w - pad - doorW;
   const doorTop = glass + 1.5;
   ctx.fillStyle = tone(style.accent, lit * 0.92);
   ctx.fillRect(doorX, doorTop, doorW, -doorTop);
-  ctx.fillStyle = mix(tone('#8fa9bb', lit), '#ffe0a8', 0.14 + night * 0.74);
+  ctx.fillStyle = blend(tone('#8fa9bb', lit), '#ffe0a8', 0.14 + night * 0.74);
   ctx.fillRect(doorX + 2.4, doorTop + 2.5, doorW - 4.8, -doorTop * 0.44);
   ctx.fillStyle = trim;
   ctx.beginPath();
   ctx.rect(doorX - 1.4, doorTop - 1.8, doorW + 2.8, 1.8);
-  ctx.rect(doorX + doorW - 4.2, -h * 0.22, 1.6, 4.2);
+  if (fine) ctx.rect(doorX + doorW - 4.2, -h * 0.22, 1.6, 4.2);
   ctx.fill();
 
-  if (plan.valance) drawValance(ctx, pad - 2.5, glass - 1, paneW + 5, plan, lit);
-  if (plan.sign) drawNameBoard(ctx, pad - 2.5, sign, w - pad * 2 + 5, signH, plan, lit, night);
+  if (plan.valance) drawValance(ctx, pad - 2.5, glass - 1, paneW + 5, plan, lit, fine);
+  if (plan.sign) {
+    drawNameBoard(ctx, pad - 2.5, sign, w - pad * 2 + 5, signH, plan, lit, night, fine);
+  }
 }
 
 /**
@@ -1207,7 +1251,7 @@ function drawFlankElevation(
   const panes = Math.max(1, Math.floor((w - doorW - w * 0.2) / 20));
   const paneW = Math.min(14, (w - doorW - w * 0.24) / panes - 4);
   if (paneW > 4) {
-    ctx.fillStyle = mix(tone('#7f97a6', lit), '#ffd89a', night * 0.5);
+    ctx.fillStyle = blend(tone('#7f97a6', lit), '#ffd89a', night * 0.5);
     ctx.beginPath();
     for (let i = 0; i < panes; i++) {
       ctx.rect(w * 0.1 + doorW + 6 + i * (paneW + 6), -h * 0.72, paneW, h * 0.24);
@@ -1233,10 +1277,11 @@ function drawUpperElevation(
   lit: number,
   night: number,
   storey: number,
+  fine: boolean,
 ): void {
   const { style, seed } = plan;
 
-  if (style.courses) {
+  if (style.courses && fine) {
     ctx.fillStyle = alpha(shade(style.wall, 0.82), 0.5);
     ctx.beginPath();
     for (let y = -6; y > -h + 3; y -= 9) ctx.rect(0, y, w, 1.1);
@@ -1252,14 +1297,14 @@ function drawUpperElevation(
   const cell = w / cols;
   const paneW = Math.min(cell * 0.52, 15);
   const paneH = Math.min((h / rows) * 0.52, 17);
-  const shutters = roll(seed, 30 + storey) > 0.62 && paneW > 7;
+  const shutters = fine && roll(seed, 30 + storey) > 0.62 && paneW > 7;
 
   // Reveals, sills, dark panes and lit panes are each one path for the same
   // reason the glazing bars are.
   const reveal = tone(style.wall, lit * 0.66);
   const sill = tone(style.trim, lit);
-  const off = mix(tone('#7d94a4', lit), '#ffdf9e', night * 0.14);
-  const on = mix(tone('#7d94a4', lit), '#ffe2a4', 0.1 + night * 0.86);
+  const off = blend(tone('#7d94a4', lit), '#ffdf9e', night * 0.14);
+  const on = blend(tone('#7d94a4', lit), '#ffe2a4', 0.1 + night * 0.86);
   const bars: Array<[number, number]> = [];
   const litPanes: Array<[number, number]> = [];
   const darkPanes: Array<[number, number]> = [];
@@ -1290,15 +1335,21 @@ function drawUpperElevation(
   for (const [x, y] of bars) {
     ctx.rect(x - 3, y + paneH + 1.8, paneW + 6, 2.2);
     // Transom bar across each pane, so a window is not a plain rectangle.
-    ctx.rect(x, y + paneH * 0.4, paneW, 1.4);
+    if (fine) ctx.rect(x, y + paneH * 0.4, paneW, 1.4);
   }
+  ctx.fill();
+
+  // Shutters, a shade down from the sills so they read as joinery beside the
+  // window rather than as a bright pilaster running up the whole wall.
   if (shutters) {
+    ctx.fillStyle = tone(style.trim, lit * 0.78);
+    ctx.beginPath();
     for (const [x, y] of bars) {
       ctx.rect(x - 5.2, y - 1, 3.4, paneH + 2);
       ctx.rect(x + paneW + 1.8, y - 1, 3.4, paneH + 2);
     }
+    ctx.fill();
   }
-  ctx.fill();
 }
 
 /** Striped awning valance hanging over a shopfront. */
@@ -1309,6 +1360,7 @@ function drawValance(
   w: number,
   plan: BuildingPlan,
   lit: number,
+  fine: boolean,
 ): void {
   const drop = 9;
   const bands = Math.max(3, Math.round(w / 11));
@@ -1322,7 +1374,7 @@ function drawValance(
     for (let i = parity; i < bands; i += 2) ctx.rect(x + i * bandW, y, bandW + 0.6, drop);
     ctx.fill();
   }
-  if (plan.valance === 2) {
+  if (plan.valance === 2 && fine) {
     // Scalloped hem: the same two colours again, as half-discs on the bottom
     // edge, so the awning does not end in a ruler-straight line.
     for (const parity of [0, 1]) {
@@ -1349,18 +1401,20 @@ function drawNameBoard(
   plan: BuildingPlan,
   lit: number,
   night: number,
+  fine: boolean,
 ): void {
   ctx.fillStyle = tone(plan.style.accent, lit * 0.86);
   ctx.fillRect(x, y, w, h);
   ctx.fillStyle = alpha('#000000', 0.16);
   ctx.fillRect(x, y + h - 1.6, w, 1.6);
+  if (!fine) return;
 
   // Lettering, as a run of bars. Real glyphs would be unreadable at this size
   // and would need a font; a rhythm of bars reads as a shop name and does not.
   const words = 2 + Math.floor(roll(plan.seed, 40) * 2);
   const inset = Math.max(3, w * 0.08);
   const run = w - inset * 2;
-  ctx.fillStyle = mix(tone('#fff6de', lit), '#ffe9b0', night * 0.6);
+  ctx.fillStyle = blend(tone('#fff6de', lit), '#ffe9b0', night * 0.6);
   ctx.beginPath();
   let at = inset;
   for (let word = 0; word < words && at < w - inset; word++) {
@@ -1386,16 +1440,17 @@ function drawRoof(
   cy: number,
   plan: BuildingPlan,
   night: number,
+  fine: boolean,
 ): void {
   const { roof, style } = plan;
 
   // Cornice capping the walls. It takes its thickness out of the top of the
   // wall rather than adding it on, so it cannot push the roof up or out.
   const cornice = Math.min(0.09, (roof.level - plan.storeys[plan.storeys.length - 1]!.base) * 0.3);
-  isoSides(ctx, cx, cy, roof.sx, roof.sy, cornice, faces(style.trim), roof.level - cornice);
+  isoSides(ctx, cx, cy, roof.sx, roof.sy, cornice, facesOf(style.trim), roof.level - cornice);
 
-  if (roof.kind === 'gable') drawGableRoof(ctx, cx, cy, plan);
-  else drawDeckRoof(ctx, cx, cy, plan, night);
+  if (roof.kind === 'gable') drawGableRoof(ctx, cx, cy, plan, fine);
+  else drawDeckRoof(ctx, cx, cy, plan, night, fine);
 }
 
 /** Level of the standable surface of a deck roof. */
@@ -1411,11 +1466,12 @@ function drawDeckRoof(
   cy: number,
   plan: BuildingPlan,
   night: number,
+  fine: boolean,
 ): void {
   const { roof, style } = plan;
   const coping = tone(style.trim, 0.94);
   // The parapet stands on the roof edge, so it shares the roof's footprint.
-  isoSides(ctx, cx, cy, roof.sx, roof.sy, roof.parapet, faces(shade(style.wall, 0.92)), roof.level);
+  isoSides(ctx, cx, cy, roof.sx, roof.sy, roof.parapet, facesOf(shade(style.wall, 0.92)), roof.level);
 
   const top = roof.level + roof.parapet;
   const rim = Math.min(0.3, Math.min(roof.sx, roof.sy) * 0.1);
@@ -1432,22 +1488,24 @@ function drawDeckRoof(
   ctx.fill();
 
   const surface = planeOrigin(cx, cy, deckLevel(roof));
-  ctx.save();
   diamondPath(ctx, surface.x, surface.y, roof.sx - rim, roof.sy - rim);
   ctx.fillStyle = plan.deck;
   ctx.fill();
-  // Felt seams, clipped to the deck so they cannot run off the side of it.
-  ctx.clip();
-  ctx.strokeStyle = alpha('#5f5b51', 0.34);
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  const reach = (roof.sx + roof.sy) * 8;
-  for (let i = -2; i <= 2; i++) {
-    ctx.moveTo(surface.x - TILE_W * roof.sx * 0.5, surface.y + i * 11 - reach * 0.25);
-    ctx.lineTo(surface.x + TILE_W * roof.sx * 0.5, surface.y + i * 11 + reach * 0.25);
+  if (fine) {
+    // Felt seams, clipped to the deck so they cannot run off the side of it.
+    ctx.save();
+    ctx.clip();
+    ctx.strokeStyle = alpha('#5f5b51', 0.34);
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    const reach = (roof.sx + roof.sy) * 8;
+    for (let i = -2; i <= 2; i++) {
+      ctx.moveTo(surface.x - TILE_W * roof.sx * 0.5, surface.y + i * 11 - reach * 0.25);
+      ctx.lineTo(surface.x + TILE_W * roof.sx * 0.5, surface.y + i * 11 + reach * 0.25);
+    }
+    ctx.stroke();
+    ctx.restore();
   }
-  ctx.stroke();
-  ctx.restore();
 
   for (const g of plan.gear) drawRoofGear(ctx, cx, cy, plan, g, night);
 
@@ -1495,7 +1553,7 @@ function drawParapetCrown(
   const at = gearCentre(cx, cy, dx, dy);
   const h = 0.34 + roll(plan.seed, 45) * 0.22;
 
-  isoSides(ctx, at.x, at.y, sx, sy, h, faces(style.accent), base);
+  isoSides(ctx, at.x, at.y, sx, sy, h, facesOf(style.accent), base);
   diamondPath(ctx, at.x, at.y - (base + h) * TILE_Z, sx, sy);
   ctx.fillStyle = tone(style.trim, 1.02);
   ctx.fill();
@@ -1529,6 +1587,7 @@ function drawGableRoof(
   cx: number,
   cy: number,
   plan: BuildingPlan,
+  fine: boolean,
 ): void {
   const { roof, style } = plan;
   const c = diamondCorners(cx, cy, roof.sx, roof.sy, roof.level);
@@ -1541,7 +1600,8 @@ function drawGableRoof(
   // The ridge runs between the midpoints of the two end walls.
   const a = alongX ? mid(c.n, c.w) : mid(c.n, c.e);
   const b = alongX ? mid(c.e, c.s) : mid(c.w, c.s);
-  const far = alongX ? c.n : c.n;
+  // The far corner is the same either way; which of the other two the far slope
+  // reaches, and which the near one does, swaps with the ridge.
   const farEnd = alongX ? c.e : c.w;
   const near = alongX ? c.w : c.e;
 
@@ -1556,21 +1616,23 @@ function drawGableRoof(
   };
 
   // Far slope, then near slope, then the gable end that faces the camera.
-  quad([far, a, b, farEnd], shade(tile, 1.16));
+  quad([c.n, a, b, farEnd], shade(tile, 1.16));
   quad([near, a, b, c.s], shade(tile, 0.84));
   quad([near, c.s, b], shade(style.wall, 0.76));
 
   // Courses down each slope and a ridge cap, which is what turns two flat
   // quads into a tiled roof.
-  ctx.strokeStyle = alpha('#2b1f18', 0.2);
-  ctx.lineWidth = 1.1;
-  ctx.beginPath();
-  for (let i = 1; i <= 3; i++) {
-    const t = i / 4;
-    ctx.moveTo(near.x + (a.x - near.x) * t, near.y + (a.y - near.y) * t);
-    ctx.lineTo(c.s.x + (b.x - c.s.x) * t, c.s.y + (b.y - c.s.y) * t);
+  if (fine) {
+    ctx.strokeStyle = alpha('#2b1f18', 0.2);
+    ctx.lineWidth = 1.1;
+    ctx.beginPath();
+    for (let i = 1; i <= 3; i++) {
+      const t = i / 4;
+      ctx.moveTo(near.x + (a.x - near.x) * t, near.y + (a.y - near.y) * t);
+      ctx.lineTo(c.s.x + (b.x - c.s.x) * t, c.s.y + (b.y - c.s.y) * t);
+    }
+    ctx.stroke();
   }
-  ctx.stroke();
   ctx.strokeStyle = tone(style.trim, 1.02);
   ctx.lineWidth = 3;
   ctx.beginPath();
@@ -1618,7 +1680,7 @@ function drawRoofGear(
       break;
     }
     case 'condenser': {
-      isoBox(ctx, at.x, at.y, g.sx, g.sy, g.h, faces('#a7b0b5'), base);
+      isoBox(ctx, at.x, at.y, g.sx, g.sy, g.h, facesOf('#a7b0b5'), base);
       // Fan grille on the lid.
       const lid = at.y - (base + g.h) * TILE_Z;
       ctx.fillStyle = '#7f888d';
@@ -1637,15 +1699,25 @@ function drawRoofGear(
       break;
     }
     case 'stair': {
-      isoBox(ctx, at.x, at.y, g.sx, g.sy, g.h, faces(shade(style.wall, 0.94)), base);
-      // Door on the face that looks at the camera.
+      // Stair head: rendered blockwork rather than another slab of wall colour,
+      // with a lip on top so it does not read as a lid of its own.
+      isoBox(ctx, at.x, at.y, g.sx, g.sy, g.h, facesOf('#b8b0a2'), base);
+      isoBox(ctx, at.x, at.y, g.sx * 0.94, g.sy * 0.94, 0.05, facesOf('#6e6a62'), base + g.h);
+      // Door on the corner that looks at the camera.
       const face = diamondCorners(at.x, at.y, g.sx, g.sy, base + g.h);
-      ctx.fillStyle = shade(style.accent, 0.8);
-      ctx.fillRect(face.s.x - 3.5, face.s.y + g.h * TILE_Z * 0.25, 7, g.h * TILE_Z * 0.7);
+      const doorH = g.h * TILE_Z * 0.66;
+      ctx.fillStyle = shade(style.accent, 0.78);
+      ctx.beginPath();
+      ctx.moveTo(face.s.x - 7, face.s.y + 3.5 + g.h * TILE_Z - doorH);
+      ctx.lineTo(face.s.x, face.s.y + g.h * TILE_Z - doorH);
+      ctx.lineTo(face.s.x, face.s.y + g.h * TILE_Z);
+      ctx.lineTo(face.s.x - 7, face.s.y + 3.5 + g.h * TILE_Z);
+      ctx.closePath();
+      ctx.fill();
       break;
     }
     case 'planter': {
-      isoBox(ctx, at.x, at.y, g.sx, g.sy, g.h, faces('#8a6a4c'), base);
+      isoBox(ctx, at.x, at.y, g.sx, g.sy, g.h, facesOf('#8a6a4c'), base);
       const top = at.y - (base + g.h) * TILE_Z;
       for (let i = -1; i <= 1; i++) {
         ctx.fillStyle = i === 0 ? '#79b25f' : '#5f9a52';
@@ -1656,31 +1728,54 @@ function drawRoofGear(
       break;
     }
     case 'chimney': {
-      isoBox(ctx, at.x, at.y, g.sx, g.sy, g.h, faces('#9c5f4c'), base);
-      isoBox(ctx, at.x, at.y, g.sx * 0.9, g.sy * 0.9, 0.07, faces('#d8cdba'), base + g.h);
+      isoBox(ctx, at.x, at.y, g.sx, g.sy, g.h, facesOf('#9c5f4c'), base);
+      isoBox(ctx, at.x, at.y, g.sx * 0.9, g.sy * 0.9, 0.07, facesOf('#d8cdba'), base + g.h);
       break;
     }
     default: {
-      // Hoarding: a panel on two legs, standing across the deck.
+      // Hoarding: a braced panel standing across the deck on two legs. The legs
+      // start at the deck and the bracing runs back to it, so the board reads as
+      // standing on the roof rather than hovering over it.
       const legs = diamondCorners(at.x, at.y, g.sx, g.sy, base);
+      // The middle of the footprint at deck level, which is where the raking
+      // props have to land. Taking it from the unlifted centre would run them
+      // half way down the building.
+      const foot = planeOrigin(at.x, at.y, base);
       const hpx = g.h * TILE_Z;
-      ctx.fillStyle = '#6f6a61';
-      for (const p of [legs.e, legs.w]) ctx.fillRect(p.x - 1.6, p.y - hpx, 3.2, hpx);
+      const boardTop = hpx;
+      const boardLow = hpx * 0.44;
+      ctx.strokeStyle = '#5e5a52';
+      ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.moveTo(legs.w.x, legs.w.y - hpx);
-      ctx.lineTo(legs.e.x, legs.e.y - hpx);
-      ctx.lineTo(legs.e.x, legs.e.y - hpx * 0.42);
-      ctx.lineTo(legs.w.x, legs.w.y - hpx * 0.42);
+      for (const p of [legs.e, legs.w]) {
+        ctx.moveTo(p.x, p.y);
+        ctx.lineTo(p.x, p.y - boardTop);
+        // Raking prop back down to the deck.
+        ctx.moveTo(p.x, p.y - boardLow);
+        ctx.lineTo(p.x + (foot.x - p.x) * 0.45, p.y + (foot.y - p.y) * 0.45);
+      }
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.moveTo(legs.w.x, legs.w.y - boardTop);
+      ctx.lineTo(legs.e.x, legs.e.y - boardTop);
+      ctx.lineTo(legs.e.x, legs.e.y - boardLow);
+      ctx.lineTo(legs.w.x, legs.w.y - boardLow);
       ctx.closePath();
-      ctx.fillStyle = mix(shade(plan.awning, 1.05), '#ffe6ad', night * 0.35);
+      ctx.fillStyle = blend(shade(plan.awning, 1.05), '#ffe6ad', night * 0.4);
       ctx.fill();
-      ctx.fillStyle = alpha('#fff6de', 0.75);
+      // Frame, so the board has an edge instead of floating as a flat colour.
+      ctx.strokeStyle = alpha('#2b1f18', 0.45);
+      ctx.lineWidth = 1.6;
+      ctx.stroke();
+
+      ctx.fillStyle = alpha('#fff6de', 0.8);
       const bars = 4;
       for (let i = 0; i < bars; i++) {
-        const t = 0.16 + (i / bars) * 0.66;
+        const t = 0.18 + (i / bars) * 0.62;
         const x = legs.w.x + (legs.e.x - legs.w.x) * t;
         const y = legs.w.y + (legs.e.y - legs.w.y) * t;
-        ctx.fillRect(x, y - hpx * 0.82, 2.4, hpx * 0.24);
+        ctx.fillRect(x, y - boardTop + hpx * 0.13, 2.4, hpx * 0.24);
       }
       break;
     }
@@ -1776,12 +1871,12 @@ export function skyPalette(t: number): SkyPalette {
   const span = hi.at - lo.at || 1;
   const k = Math.min(1, Math.max(0, (t - lo.at) / span));
   return {
-    top: mix(lo.p.top, hi.p.top, k),
-    mid: mix(lo.p.mid, hi.p.mid, k),
-    ground: mix(lo.p.ground, hi.p.ground, k),
-    sun: mix(lo.p.sun, hi.p.sun, k),
-    far: mix(lo.p.far, hi.p.far, k),
-    near: mix(lo.p.near, hi.p.near, k),
+    top: blend(lo.p.top, hi.p.top, k),
+    mid: blend(lo.p.mid, hi.p.mid, k),
+    ground: blend(lo.p.ground, hi.p.ground, k),
+    sun: blend(lo.p.sun, hi.p.sun, k),
+    far: blend(lo.p.far, hi.p.far, k),
+    near: blend(lo.p.near, hi.p.near, k),
   };
 }
 
