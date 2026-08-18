@@ -38,6 +38,22 @@ want dealt with — including the marker floating above it:
 - **A plate waiting on a counter or stove** is run out by the nearest free waiter, which is also how you unblock a kitchen with nowhere to put the next dish.
 - **A worker who has stopped** opens the team list where you can feed them.
 
+### The first hour
+
+A coach thread runs alongside the game rather than in front of it — nothing is
+ever paused, and the **×** hides a tip you would rather work out for yourself
+until the next one is ready. What a tip will not do is tick itself off. Each one
+waits for the thing it teaches to happen *while it is on screen*: the welcome
+clears when a guest has eaten and paid, the cleaning tip when a table has gone
+from dirty back to clean, the seating tip when the room has six seats a guest
+could really sit in — a chair touching a table with a walkway to it, not a stool
+parked on its own. Counting only what happens from the moment a tip appears is
+what stops the team quietly satisfying a lesson before it has been read.
+**Show me** pans to whatever the tip is about, opens the panel that fixes it
+(hiring, when the wiping tip finds no cleaner), or starts placing the piece you
+are missing, so reading the Market and the Menu still introduces them without
+standing in for a shift.
+
 ### What drives progression
 
 - **Dish mastery.** Every serving earns a recipe experience. Each of the ten mastery levels adds 12% to the price and shaves a little off the cook time, so a focused menu cooked constantly beats a sprawling one.
@@ -72,7 +88,9 @@ covers the things that are easiest to get subtly wrong — the isometric
 round-trip, picking a wall panel from a screen position, pathfinding and the
 "don't let the player seal off the doorway" rule, the mastery curve — and then
 runs four in-game minutes of the real simulation headlessly to confirm customers
-are actually seated, fed and charged.
+are actually seated, fed and charged. It also replays the onboarding coach the way
+the buttons drive it, to prove a game that only opens panels cannot finish it and
+one that serves and wipes can.
 
 ## Publishing this to your own GitHub repo
 

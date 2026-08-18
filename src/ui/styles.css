@@ -995,6 +995,22 @@ button:not(:disabled),
   padding: 7px 12px;
 }
 
+/* Puts the tip away without ticking it off; the thread waits for the room. */
+.coach-x {
+  position: absolute;
+  top: -9px;
+  right: -9px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: #fffdf8;
+  border: 2px solid var(--cherry);
+  display: grid;
+  place-items: center;
+  color: var(--cherry);
+  box-shadow: var(--shadow-chip);
+}
+
 .section-title {
   font-size: 12px;
   font-weight: 700;

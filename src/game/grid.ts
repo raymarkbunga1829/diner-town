@@ -268,4 +268,9 @@ export class Grid {
     if (this.accessTiles(chair).length === 0) return false;
     return this.accessTiles(table).length > 0;
   }
+
+  /** Every chair a guest could actually be sat in, which is what a cover needs. */
+  usableSeats(): Placed[] {
+    return this.game.placedWithRole('chair').filter((chair) => this.isUsableSeat(chair));
+  }
 }

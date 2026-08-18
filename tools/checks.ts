@@ -8,7 +8,7 @@
  */
 
 import { Camera } from '../src/engine/camera';
-import { TILE_H, TILE_W, TILE_Z, tileToWorld, worldToTile } from '../src/engine/iso';
+import { NEIGHBOURS, TILE_H, TILE_W, TILE_Z, tileToWorld, worldToTile } from '../src/engine/iso';
 import { nearestActor } from '../src/game/pick';
 import {
   cumulativeServings,
@@ -29,7 +29,15 @@ import { Simulation } from '../src/game/sim';
 import { createNewGame, Game, SAVE_KEY } from '../src/game/state';
 import type { Order, SaveData, Staff } from '../src/game/types';
 import { buildingBox } from '../src/render/renderer';
-import { COACH_STEPS } from '../src/ui/tutorial';
+import {
+  coachAction,
+  coachBaseline,
+  coachProgress,
+  COACH_STEPS,
+  COACH_TARGET_SEATS,
+  type CoachBaseline,
+  type CoachContext,
+} from '../src/ui/tutorial';
 
 let failures = 0;
 let checks = 0;
@@ -260,18 +268,296 @@ group('Shop copy matches the sim', () => {
 
 // ---------------------------------------------------------- coach order
 
+/** Index of the step whose copy matches, so the checks read like the thread. */
+function coachStep(pattern: RegExp): number {
+  return COACH_STEPS.findIndex((s) => pattern.test(s.html));
+}
+
+const WELCOME_STEP = coachStep(/clean seat/i);
+const COUNTER_STEP = coachStep(/pickup counter/i);
+const CLEANER_STEP = coachStep(/wipes dirty tables/i);
+const SEATS_STEP = coachStep(/More seats/i);
+const STYLE_STEP = coachStep(/Style/);
+const OUTRO_STEP = COACH_STEPS.length - 1;
+
+/** Where the coach is up to, the way the app holds it between frames. */
+interface CoachRun {
+  step: number;
+  since: CoachBaseline;
+  sheets: string[];
+  placed: string[];
+}
+
+const coachAt = (game: Game, step = 0): CoachRun => ({
+  step,
+  since: coachBaseline(game),
+  sheets: [],
+  placed: [],
+});
+
+/**
+ * Replay the coach the way the UI drives it: tap the CTA on whichever step is
+ * showing, record what that tap marked or opened, and let the thread move on
+ * only when the step's own condition is satisfied — re-baselining each new tip
+ * exactly as the app does. Never ticks the simulation, so anything it reaches
+ * was reached by tapping alone.
+ */
+function tapThroughCoach(game: Game, grid: Grid, seen: Set<string>, from: CoachRun): CoachRun {
+  const sheets: string[] = [];
+  const placed: string[] = [];
+  let index = from.step;
+  let since = from.since;
+
+  for (let taps = 0; taps <= COACH_STEPS.length * 2; taps++) {
+    grid.sync();
+    const settled = coachProgress(index, { game, grid, seen, since });
+    if (settled !== index) {
+      index = settled;
+      since = coachBaseline(game);
+    }
+    if (index >= COACH_STEPS.length) break;
+
+    const ctx: CoachContext = { game, grid, seen, since };
+    const action = coachAction(COACH_STEPS[index]!, ctx);
+    if (action.mark) seen.add(action.mark);
+    if (action.sheet) {
+      sheets.push(
+        action.sheet.tab ? `${action.sheet.panel}:${action.sheet.tab}` : action.sheet.panel,
+      );
+      // Opening a sheet is exactly what the app records as having seen it.
+      seen.add(`panel:${action.sheet.panel}`);
+    }
+    if (action.place) placed.push(action.place);
+
+    // Tapping settled nothing the step was waiting for, so this is as far as a
+    // player who only presses buttons can get.
+    const after = coachProgress(index, ctx);
+    if (after === index) break;
+    index = after;
+    since = coachBaseline(game);
+  }
+  return { step: index, since, sheets, placed };
+}
+
+/** Every milestone the coach can read, as though the player had tapped it all. */
+function everyMilestone(): Set<string> {
+  const seen = new Set<string>(['intro', 'noticed-counter', 'noticed-cleaner', 'tap-to-help', 'outro']);
+  for (const id of ['shop', 'menu', 'market', 'staff', 'manage']) seen.add(`panel:${id}`);
+  return seen;
+}
+
 group('Tutorial order', () => {
   const html = COACH_STEPS.map((s) => s.html);
-  check('welcome leads with a clean seat', /clean seat/i.test(html[0] ?? ''));
-  check('counter is step 2', /pickup counter/i.test(html[1] ?? ''));
-  check('cleaner is step 3', /cleaner/i.test(html[2] ?? ''));
-  check('extra seats come after the cleaner', /More seats/i.test(html[3] ?? ''));
+  check('welcome leads with a clean seat', WELCOME_STEP === 0);
+  check('counter is step 2', COUNTER_STEP === 1);
+  check('cleaner is step 3', CLEANER_STEP === 2);
+  check('extra seats come after the cleaner', SEATS_STEP === 3);
   check('the welcome teaches the seating tap', /tap a waiting guest/i.test(html[0] ?? ''));
   check('tapping the floor is taught', COACH_STEPS.some((s) => s.mark === 'tap-to-help'));
-  check('Show me can place a missing counter', COACH_STEPS[1]?.placeIfMissing === 'counter_wood');
   check('counter step focuses the counter', typeof COACH_STEPS[1]?.focus === 'function');
   check('cleaner step focuses the cleaner', typeof COACH_STEPS[2]?.focus === 'function');
+  check('the style step is the last thing before the sign-off', STYLE_STEP === OUTRO_STEP - 1);
+  check('no copy names another game', !/restaurant city|playfish|\bEA\b/i.test(html.join(' ')));
+
+  // Show me has to fix the room, not just describe it.
+  const game = new Game(createNewGame());
+  const grid = new Grid(game);
+  grid.sync();
+  const ctx: CoachContext = { game, grid, seen: new Set<string>(), since: coachBaseline(game) };
+
+  const withCounter = coachAction(COACH_STEPS[COUNTER_STEP]!, ctx);
+  check('with a counter, Show me points at it', !!withCounter.focus && withCounter.place === null);
+
+  for (const counter of game.placedWithRole('counter')) {
+    game.data.placed = game.data.placed.filter((p) => p.uid !== counter.uid);
+  }
+  game.touch();
+  grid.sync();
+  const noCounter = coachAction(COACH_STEPS[COUNTER_STEP]!, ctx);
+  check('with none, Show me starts placing one', noCounter.place === 'counter_wood', `${noCounter.place}`);
+
+  const withCleaner = coachAction(COACH_STEPS[CLEANER_STEP]!, ctx);
+  check('with a cleaner, Show me pans to the room', withCleaner.sheet === null && !!withCleaner.focus);
+
+  game.data.staff = game.data.staff.filter((s) => s.role !== 'cleaner');
+  game.touch();
+  const noCleaner = coachAction(COACH_STEPS[CLEANER_STEP]!, ctx);
+  check(
+    'with none, Show me opens hiring rather than panning',
+    noCleaner.sheet?.panel === 'staff' && noCleaner.sheet?.tab === 'hire',
+    JSON.stringify(noCleaner.sheet),
+  );
 });
+
+group('Show me cannot tap the coach through the first hour', () => {
+  const game = new Game(createNewGame());
+  const grid = new Grid(game);
+  grid.sync();
+
+  check('nobody has been served', game.data.stats.customersServed === 0);
+  check('nothing has been wiped', game.data.stats.tablesCleaned === 0);
+
+  // A player who taps every button and opens every panel, and nothing else.
+  const seen = everyMilestone();
+  const ctx: CoachContext = { game, grid, seen, since: coachBaseline(game) };
+  check('the welcome will not sign itself off', coachProgress(0, ctx) === WELCOME_STEP);
+  check(
+    'no milestone finishes the coach from anywhere in the thread',
+    COACH_STEPS.every((_s, i) => coachProgress(i, ctx) < COACH_STEPS.length),
+  );
+  check(
+    'the sign-off itself needs a cover',
+    coachProgress(OUTRO_STEP, ctx) === OUTRO_STEP,
+    'the outro completed with nothing served',
+  );
+
+  // And the same through the real tapping path, from a clean slate.
+  const tapped = tapThroughCoach(game, grid, new Set<string>(), coachAt(game));
+  check('tapping Show me stops on the welcome', tapped.step === WELCOME_STEP, `stopped on ${tapped.step}`);
+  check('the coach is nowhere near finished', tapped.step < COACH_STEPS.length);
+
+  // Starting further along, each early step still waits for its own outcome.
+  const fromCounter = tapThroughCoach(game, grid, new Set<string>(), coachAt(game, COUNTER_STEP));
+  check('the counter tip hands over to the cleaner tip', fromCounter.step === CLEANER_STEP);
+  check('the cleaner tip waits for a wipe', fromCounter.step !== SEATS_STEP);
+
+  // A shift that ran before the tip went up is not the tip's shift. Without
+  // this, the room quietly satisfies each tip before it can be read.
+  const veteran = new Game(createNewGame());
+  veteran.data.stats.customersServed = 40;
+  veteran.data.stats.tablesCleaned = 30;
+  const veteranGrid = new Grid(veteran);
+  veteranGrid.sync();
+  const reopened = tapThroughCoach(veteran, veteranGrid, everyMilestone(), coachAt(veteran));
+  check(
+    'a past shift does not count towards the tip showing now',
+    reopened.step === WELCOME_STEP,
+    `stopped on ${reopened.step}`,
+  );
+});
+
+group('Serving and wiping is what moves the coach on', () => {
+  const game = new Game(createNewGame());
+  const sim = new Simulation(game);
+  const grid = sim.grid;
+  grid.sync();
+  const seen = new Set<string>();
+
+  check('the starter kit has four usable seats', grid.usableSeats().length === 4,
+    `${grid.usableSeats().length}`);
+
+  // The welcome is what is on screen from the moment the diner opens.
+  let coach = coachAt(game);
+  coach = tapThroughCoach(game, grid, seen, coach);
+  check('a fresh diner stops on the welcome', coach.step === WELCOME_STEP, `stopped on ${coach.step}`);
+
+  const served = runUntil(sim, () => game.data.stats.customersServed > coach.since.customersServed, 240);
+  check('a guest was served', served, `served ${game.data.stats.customersServed}`);
+  if (!served) return;
+
+  coach = tapThroughCoach(game, grid, seen, coach);
+  check(
+    'a real cover carries the welcome and the counter tip through to the cleaner',
+    coach.step === CLEANER_STEP,
+    `stopped on ${coach.step}`,
+  );
+  check('the counter was acknowledged on the way', seen.has('noticed-counter'));
+
+  const wiped = runUntil(sim, () => game.data.stats.tablesCleaned > coach.since.tablesCleaned, 240);
+  check('a table went from dirty back to clean', wiped, `wiped ${game.data.stats.tablesCleaned}`);
+  if (!wiped) return;
+
+  coach = tapThroughCoach(game, grid, seen, coach);
+  check(
+    'a real wipe carries the coach to the seating step',
+    coach.step === SEATS_STEP,
+    `stopped on ${coach.step}`,
+  );
+
+  // Stools nowhere near a table are not seats, and must not count as any.
+  const before = grid.usableSeats().length;
+  let orphans = 0;
+  for (let y = 0; y < grid.size && orphans < 2; y++) {
+    for (let x = 0; x < grid.size && orphans < 2; x++) {
+      if (!grid.canPlace(FURNITURE_BY_ID.chair_stool!, x, y, 0)) continue;
+      const beside = NEIGHBOURS.some(([dx, dy]) => {
+        const p = grid.solidAt(x + dx, y + dy);
+        return !!p && game.defOf(p)?.role === 'table';
+      });
+      if (beside) continue;
+      game.data.placed.push({ uid: game.nextUid(), defId: 'chair_stool', tx: x, ty: y, rot: 0 });
+      game.touch();
+      grid.sync();
+      orphans++;
+    }
+  }
+  check('two orphan stools were placed', orphans === 2);
+  check('the raw chair count went up', game.seatCount === 4 + orphans, `${game.seatCount}`);
+  check('no new usable seats appeared', grid.usableSeats().length === before);
+  coach = tapThroughCoach(game, grid, seen, coach);
+  check('orphan stools do not satisfy the seating step', coach.step === SEATS_STEP);
+
+  // A table with a chair on each side is a different matter.
+  const built = addSeatingGroup(game, grid);
+  check('the room still has space for a seating group', built);
+  if (!built) return;
+  check(
+    'the new group is usable seating',
+    grid.usableSeats().length >= COACH_TARGET_SEATS,
+    `${grid.usableSeats().length} usable seats`,
+  );
+
+  coach = tapThroughCoach(game, grid, seen, coach);
+  check(
+    'real seating carries the coach to the style step',
+    coach.step === STYLE_STEP,
+    `stopped on ${coach.step}`,
+  );
+  check('the market was introduced along the way', seen.has('panel:market'));
+  check('so was the menu', seen.has('panel:menu'));
+  check('but reading them was not what finished the coach', coach.step < COACH_STEPS.length);
+
+  // Dress the room until Style is real, and the sign-off is finally earned.
+  const painting = FURNITURE_BY_ID.painting!;
+  for (let x = 0; x < grid.size && game.ambience < 22; x++) {
+    if (!grid.canPlace(painting, x, -1, 0)) continue;
+    game.data.placed.push({ uid: game.nextUid(), defId: painting.id, tx: x, ty: -1, rot: 0 });
+    game.touch();
+    grid.sync();
+  }
+  check('the room has some style now', game.ambience >= 22, `${game.ambience}`);
+  coach = tapThroughCoach(game, grid, seen, coach);
+  check('the coach can be finished', coach.step === COACH_STEPS.length, `stopped on ${coach.step}`);
+  check('the sign-off was acknowledged', seen.has('outro'));
+});
+
+/**
+ * Add a table with a chair on each side, accepting only a spot the shop itself
+ * would allow — so the room the coach is then judged on is one a player could
+ * actually have built.
+ */
+function addSeatingGroup(game: Game, grid: Grid): boolean {
+  const put = (defId: string, tx: number, ty: number): number | null => {
+    const def = FURNITURE_BY_ID[defId]!;
+    if (!grid.canPlace(def, tx, ty, 0)) return null;
+    const uid = game.nextUid();
+    game.data.placed.push({ uid, defId, tx, ty, rot: 0 });
+    game.touch();
+    grid.sync();
+    return uid;
+  };
+
+  for (let y = 0; y < grid.size; y++) {
+    for (let x = 0; x + 2 < grid.size; x++) {
+      const added = [put('table_square', x + 1, y), put('chair_stool', x, y), put('chair_stool', x + 2, y)];
+      if (added.every((uid) => uid !== null)) return true;
+      game.data.placed = game.data.placed.filter((p) => !added.includes(p.uid));
+      game.touch();
+      grid.sync();
+    }
+  }
+  return false;
+}
 
 // -------------------------------------------------------------- tap to help
 
