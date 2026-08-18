@@ -53,7 +53,7 @@ export function drawFurniture(
       isoBox(ctx, cx, cy, 0.82, 0.82, 0.09, faces(pal.base), 0.52);
       isoBox(ctx, cx, cy, 0.7, 0.7, 0.01, faces(pal.top), 0.61);
       woodGrain(ctx, cx, cy, 0.62, 0.68, withAlpha(pal.shade, 0.2));
-      tableSetting(ctx, cx, cy, 0.62, opts.time);
+      tableSetting(ctx, cx, cy, 0.62, opts.time, opts.dirty);
       break;
     }
     case 'tableRound': {
@@ -62,7 +62,7 @@ export function drawFurniture(
       isoEllipse(ctx, cx, cy, 0.4, shade(pal.base, 0.8), 0.5);
       isoEllipse(ctx, cx, cy, 0.4, pal.top, 0.56);
       isoEllipse(ctx, cx, cy, 0.3, shade(pal.top, 1.06), 0.565);
-      tableSetting(ctx, cx, cy, 0.57, opts.time);
+      tableSetting(ctx, cx, cy, 0.57, opts.time, opts.dirty);
       break;
     }
     case 'tableMarble': {
@@ -81,7 +81,7 @@ export function drawFurniture(
         ctx.stroke();
       }
       ctx.restore();
-      tableSetting(ctx, cx, cy, 0.61, opts.time);
+      tableSetting(ctx, cx, cy, 0.61, opts.time, opts.dirty);
       break;
     }
     case 'tableBooth': {
@@ -92,7 +92,7 @@ export function drawFurniture(
       legs(ctx, cx, cy, 0.42, 0.5, pal.shade);
       isoBox(ctx, cx, cy, 0.72, 0.72, 0.09, faces(pal.top), 0.5);
       woodGrain(ctx, cx, cy, 0.6, 0.7, withAlpha(pal.shade, 0.2));
-      tableSetting(ctx, cx, cy, 0.6, opts.time);
+      tableSetting(ctx, cx, cy, 0.6, opts.time, opts.dirty);
       break;
     }
 
@@ -356,16 +356,6 @@ export function drawFurniture(
       break;
   }
 
-  if (opts.dirty) {
-    ctx.fillStyle = 'rgba(120, 96, 40, 0.55)';
-    for (let i = 0; i < 4; i++) {
-      const a = (i / 4) * Math.PI * 2 + 0.6;
-      ctx.beginPath();
-      ctx.ellipse(cx + Math.cos(a) * 11, cy - 0.62 * TILE_Z + Math.sin(a) * 5, 4.5, 2.6, 0, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  }
-
   if (opts.tint) {
     ctx.globalCompositeOperation = 'source-atop';
     ctx.fillStyle = opts.tint;
@@ -573,6 +563,8 @@ export interface PersonOptions {
   sitting: boolean;
   /** Overrides the shirt colour, for staff uniforms. */
   uniform?: { shirt: string; trim: string };
+  /** Job, which decides the headgear and trimmings that name it at a glance. */
+  role?: 'waiter' | 'chef' | 'cleaner';
   /** Dish carried on a tray. */
   carrying?: Dish | null;
   /** Small prop in hand. */
@@ -602,8 +594,11 @@ export function drawPerson(
   const trim = opts.uniform?.trim ?? shade(shirt, 0.7);
 
   const stride = opts.walking ? Math.sin(opts.time * 9) : 0;
-  const bob = opts.walking ? Math.abs(Math.cos(opts.time * 9)) * 1.6 : Math.sin(opts.time * 1.6) * 0.5;
+  const bob = opts.walking ? Math.abs(Math.cos(opts.time * 9)) * 1.9 : Math.sin(opts.time * 1.6) * 0.5;
   const seatDrop = opts.sitting ? 7 : 0;
+  // The upper body counter-rotates against the stride, which is what makes the
+  // walk read as walking rather than as a figure sliding along the floor.
+  const sway = opts.walking ? -stride * 0.9 : 0;
 
   // Light falls from the upper left, so the -x side of every limb is the lit one.
   const shirtLit = shade(shirt, 1.1);
@@ -614,7 +609,8 @@ export function drawPerson(
 
   ctx.save();
   if (opts.alpha !== undefined) ctx.globalAlpha = opts.alpha;
-  softShadow(ctx, cx, cy, opts.sitting ? 0.3 : 0.36, 0.2);
+  // The shadow stretches as the figure lifts off, which sells the bounce.
+  softShadow(ctx, cx, cy, (opts.sitting ? 0.3 : 0.36) + bob * 0.012, 0.2);
 
   ctx.translate(cx, cy - bob + seatDrop);
   if (flip) ctx.scale(-1, 1);
@@ -665,6 +661,7 @@ export function drawPerson(
   }
 
   // ------------------------------------------------------------------ torso
+  ctx.translate(sway, 0);
   const armSwing = opts.walking ? stride * 3 : 0;
 
   // Far arm, behind the body.
@@ -702,16 +699,65 @@ export function drawPerson(
     ctx.fill();
   }
 
-  // Apron, for anyone in a uniform.
+  // Uniforms. Each job gets a different garment as well as a different colour,
+  // because at phone size shape carries much further than hue.
+  if (opts.role === 'waiter') {
+    // Cherry waistcoat with cream lapels.
+    ctx.fillStyle = trim;
+    roundRect(ctx, -6.6 * s, bodyTop + 0.4 * s, 13.2 * s, 11.4 * s, 3.4);
+    ctx.fill();
+    ctx.fillStyle = shade(shirt, 1.02);
+    ctx.beginPath();
+    ctx.moveTo(-3.4 * s, bodyTop + 0.4 * s);
+    ctx.lineTo(0, bodyTop + 6.4 * s);
+    ctx.lineTo(3.4 * s, bodyTop + 0.4 * s);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255, 240, 210, 0.85)';
+    for (let i = 0; i < 2; i++) {
+      ctx.beginPath();
+      ctx.arc(0, bodyTop + (7.4 + i * 2.4) * s, 0.8 * s, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  } else if (opts.role === 'chef') {
+    // Double-breasted whites with a neckerchief.
+    ctx.fillStyle = shade(shirt, 1.03);
+    roundRect(ctx, -7 * s, bodyTop + 0.6 * s, 14 * s, 11.6 * s, 3);
+    ctx.fill();
+    ctx.fillStyle = withAlpha('#c8bda6', 0.55);
+    ctx.beginPath();
+    ctx.moveTo(2.4 * s, bodyTop + 0.6 * s);
+    ctx.lineTo(2.4 * s, bodyTop + 12.2 * s);
+    ctx.stroke();
+    ctx.fillStyle = '#d8cfbb';
+    for (let i = 0; i < 3; i++) {
+      for (const dx of [-2.6, 2.6]) {
+        ctx.beginPath();
+        ctx.arc(dx * s, bodyTop + (3 + i * 3) * s, 0.85 * s, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    ctx.fillStyle = trim;
+    ctx.beginPath();
+    ctx.moveTo(-4 * s, bodyTop + 0.2 * s);
+    ctx.lineTo(0, bodyTop + 4.6 * s);
+    ctx.lineTo(4 * s, bodyTop + 0.2 * s);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // Apron, for anyone in a uniform. Waiters wear a short bistro apron so the
+  // waistcoat still shows; the kitchen wears a bib.
   if (opts.uniform) {
-    ctx.fillStyle = 'rgba(252, 249, 241, 0.92)';
-    roundRect(ctx, -5.6 * s, bodyTop + 4.6 * s, 11.2 * s, 9.4 * s, 2);
+    const apronTop = opts.role === 'waiter' ? 7.2 : 4.6;
+    ctx.fillStyle = 'rgba(252, 249, 241, 0.93)';
+    roundRect(ctx, -5.8 * s, bodyTop + apronTop * s, 11.6 * s, (14 - apronTop) * s, 2);
     ctx.fill();
     ctx.strokeStyle = 'rgba(186, 172, 150, 0.8)';
     ctx.lineWidth = 0.9 * s;
     ctx.beginPath();
-    ctx.moveTo(-5.6 * s, bodyTop + 5.6 * s);
-    ctx.lineTo(5.6 * s, bodyTop + 5.6 * s);
+    ctx.moveTo(-5.8 * s, bodyTop + (apronTop + 1) * s);
+    ctx.lineTo(5.8 * s, bodyTop + (apronTop + 1) * s);
     ctx.stroke();
   }
 
@@ -720,15 +766,17 @@ export function drawPerson(
   roundRect(ctx, -11.2 * s, bodyTop + 2 * s - armSwing, 3.8 * s, 10 * s, 2);
   ctx.fill();
 
-  // Hands.
-  ctx.fillStyle = look.skin;
+  // Hands. Cleaners work in rubber gloves, which is a surprisingly strong cue
+  // for which of three near-identical figures is the one wiping tables.
+  const glove = opts.role === 'cleaner' ? '#f4c22e' : null;
+  ctx.fillStyle = glove ?? look.skin;
   ctx.beginPath();
-  ctx.arc(-9.2 * s, bodyTop + 12 * s - armSwing, 2.5 * s, 0, Math.PI * 2);
+  ctx.arc(-9.2 * s, bodyTop + 12 * s - armSwing, glove ? 2.9 * s : 2.5 * s, 0, Math.PI * 2);
   ctx.fill();
   if (!opts.carrying) {
-    ctx.fillStyle = skinShade;
+    ctx.fillStyle = glove ? shade(glove, 0.88) : skinShade;
     ctx.beginPath();
-    ctx.arc(9.3 * s, bodyTop + 12 * s + armSwing, 2.5 * s, 0, Math.PI * 2);
+    ctx.arc(9.3 * s, bodyTop + 12 * s + armSwing, glove ? 2.9 * s : 2.5 * s, 0, Math.PI * 2);
     ctx.fill();
   }
 
@@ -763,6 +811,8 @@ export function drawPerson(
 
   drawHair(ctx, look, headY, s, away);
   if (!away) drawFace(ctx, look, headY, s, opts.time);
+  if (opts.role) drawUniformHat(ctx, opts.role, headY, s, away);
+  else drawGuestExtra(ctx, look, headY, s, away);
 
   // Props
   if (opts.carrying) {
@@ -827,8 +877,10 @@ function woodGrain(
 }
 
 /**
- * Dressing on a laid table: a condiment pair and a posy, both set towards the
- * back so the middle stays clear for the plates the kitchen sends out.
+ * Dressing on a table. A laid table gets a crisp folded napkin, condiments and a
+ * posy; a used one gets a smeared plate, a toppled cup and crumbs instead. The
+ * difference has to be obvious from across the room, because clearing tables is
+ * half the loop.
  */
 function tableSetting(
   ctx: CanvasRenderingContext2D,
@@ -836,8 +888,75 @@ function tableSetting(
   cy: number,
   lift: number,
   time: number,
+  dirty = false,
 ): void {
   const y = cy - lift * TILE_Z;
+
+  if (dirty) {
+    // A stained cloth, so the whole top reads as soiled and not just littered.
+    ctx.fillStyle = 'rgba(150, 116, 62, 0.3)';
+    ctx.beginPath();
+    ctx.ellipse(cx + 2, y - 1, 17, 8, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Used plate with the last of a meal on it.
+    ctx.fillStyle = 'rgba(74, 44, 26, 0.25)';
+    ctx.beginPath();
+    ctx.ellipse(cx - 4, y - 1.5, 11, 4.8, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#efe6d4';
+    ctx.beginPath();
+    ctx.ellipse(cx - 5, y - 4, 10.5, 4.6, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#c9b795';
+    ctx.beginPath();
+    ctx.ellipse(cx - 5, y - 3.6, 7, 3, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#8d5a2a';
+    ctx.beginPath();
+    ctx.ellipse(cx - 7, y - 4.4, 2.6, 1.5, -0.3, 0, Math.PI * 2);
+    ctx.ellipse(cx - 2.4, y - 3, 1.9, 1.1, 0.4, 0, Math.PI * 2);
+    ctx.fill();
+    // Cutlery dropped across it.
+    ctx.strokeStyle = '#9aa4ab';
+    ctx.lineWidth = 1.6;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(cx - 10, y - 6.5);
+    ctx.lineTo(cx - 1, y - 2);
+    ctx.stroke();
+
+    // Toppled cup and a crumpled napkin.
+    ctx.fillStyle = '#dfd6c4';
+    ctx.save();
+    ctx.translate(cx + 9, y - 4);
+    ctx.rotate(1.15);
+    roundRect(ctx, -3, -5, 6.4, 8, 1.6);
+    ctx.fill();
+    ctx.restore();
+    ctx.fillStyle = 'rgba(120, 78, 40, 0.5)';
+    ctx.beginPath();
+    ctx.ellipse(cx + 13, y - 1, 4.4, 2.2, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#f3ece0';
+    ctx.beginPath();
+    ctx.moveTo(cx + 4, y - 7.5);
+    ctx.lineTo(cx + 9.5, y - 9.5);
+    ctx.lineTo(cx + 11, y - 6);
+    ctx.lineTo(cx + 5.5, y - 4.5);
+    ctx.closePath();
+    ctx.fill();
+
+    // Crumbs.
+    ctx.fillStyle = 'rgba(126, 88, 44, 0.75)';
+    for (let i = 0; i < 6; i++) {
+      const a = i * 1.9;
+      ctx.beginPath();
+      ctx.arc(cx + Math.cos(a) * 13, y - 1 + Math.sin(a) * 5.5, 1.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    return;
+  }
 
   // Salt and pepper.
   for (const [dx, cap] of [
@@ -851,6 +970,23 @@ function tableSetting(
     roundRect(ctx, cx + dx, y - 7, 3.2, 1.8, 1);
     ctx.fill();
   }
+
+  // Folded napkin with cutlery, which is the crispest "this table is ready" cue.
+  ctx.fillStyle = '#fffaf0';
+  ctx.beginPath();
+  ctx.moveTo(cx - 1, y - 4.5);
+  ctx.lineTo(cx + 6, y - 7);
+  ctx.lineTo(cx + 7.5, y - 4.5);
+  ctx.lineTo(cx + 0.5, y - 2);
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = '#b9c2c8';
+  ctx.lineWidth = 1.3;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(cx + 1.4, y - 5.4);
+  ctx.lineTo(cx + 5.6, y - 3.8);
+  ctx.stroke();
 
   // A small vase with two blooms that drift in the draught.
   const vx = cx - 12;
@@ -961,6 +1097,106 @@ function drawFace(
   ctx.restore();
 }
 
+/**
+ * Headgear by job. Silhouette does the work here: a tall toque, a peaked cap and
+ * a knotted bandana are all still telling you who is who when the whole figure
+ * is thirty pixels high.
+ */
+function drawUniformHat(
+  ctx: CanvasRenderingContext2D,
+  role: 'waiter' | 'chef' | 'cleaner',
+  headY: number,
+  s: number,
+  away: boolean,
+): void {
+  switch (role) {
+    case 'chef': {
+      const brimY = headY - 8.4 * s;
+      ctx.fillStyle = '#fffdf8';
+      roundRect(ctx, -7.6 * s, brimY - 13 * s, 15.2 * s, 14 * s, 5.6 * s);
+      ctx.fill();
+      // Pleats in the crown, and a shaded side so it is not a white blob.
+      ctx.fillStyle = withAlpha('#ddd3c0', 0.65);
+      roundRect(ctx, 3.2 * s, brimY - 12.4 * s, 4 * s, 12.6 * s, 3.4 * s);
+      ctx.fill();
+      ctx.fillStyle = '#fffefb';
+      roundRect(ctx, -8.8 * s, brimY - 1.4 * s, 17.6 * s, 5 * s, 2 * s);
+      ctx.fill();
+      ctx.strokeStyle = withAlpha('#c9bfa9', 0.8);
+      ctx.lineWidth = 0.9 * s;
+      ctx.beginPath();
+      ctx.moveTo(-8.8 * s, brimY + 3 * s);
+      ctx.lineTo(8.8 * s, brimY + 3 * s);
+      ctx.stroke();
+      break;
+    }
+    case 'waiter': {
+      // Pillbox cap, cocked to one side.
+      ctx.fillStyle = '#c73a2e';
+      roundRect(ctx, -8.4 * s, headY - 13.4 * s, 13 * s, 6.4 * s, 2.6 * s);
+      ctx.fill();
+      ctx.fillStyle = '#e2564a';
+      roundRect(ctx, -8.4 * s, headY - 13.4 * s, 13 * s, 2.4 * s, 1.6 * s);
+      ctx.fill();
+      break;
+    }
+    default: {
+      // Bandana with a knot on the shaded side.
+      ctx.fillStyle = '#2f8b83';
+      ctx.beginPath();
+      ctx.arc(0, headY - 1.6 * s, 10.7 * s, Math.PI * 1.03, Math.PI * 1.97);
+      ctx.fill();
+      ctx.fillStyle = '#7ed0c4';
+      roundRect(ctx, -10.4 * s, headY - 6.4 * s, 20.8 * s, 3.4 * s, 1.6 * s);
+      ctx.fill();
+      if (!away) {
+        ctx.fillStyle = '#2f8b83';
+        ctx.beginPath();
+        ctx.arc(9.6 * s, headY - 4.6 * s, 2.6 * s, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      break;
+    }
+  }
+}
+
+/**
+ * A hat or a scarf on some of the guests, chosen from their existing colours so
+ * no save data changes. Guests wearing something the staff never wear is what
+ * keeps the two crowds apart at a glance.
+ */
+function drawGuestExtra(
+  ctx: CanvasRenderingContext2D,
+  look: Appearance,
+  headY: number,
+  s: number,
+  away: boolean,
+): void {
+  const pick = hashString(look.shirt + look.pants + look.hairStyle) % 6;
+  if (pick === 0) {
+    // Bobble hat.
+    ctx.fillStyle = look.shirt;
+    ctx.beginPath();
+    ctx.arc(0, headY - 2.6 * s, 10.9 * s, Math.PI * 1.02, Math.PI * 1.98);
+    ctx.fill();
+    ctx.fillStyle = shade(look.shirt, 1.18);
+    roundRect(ctx, -10.6 * s, headY - 7.6 * s, 21.2 * s, 3.6 * s, 1.8 * s);
+    ctx.fill();
+    ctx.fillStyle = '#fff6e4';
+    ctx.beginPath();
+    ctx.arc(0, headY - 13.8 * s, 2.8 * s, 0, Math.PI * 2);
+    ctx.fill();
+  } else if (pick === 1 && !away) {
+    // Scarf tucked under the chin.
+    ctx.fillStyle = shade(look.shirt, 0.72);
+    roundRect(ctx, -6.4 * s, headY + 8 * s, 12.8 * s, 4.2 * s, 2 * s);
+    ctx.fill();
+    ctx.fillStyle = shade(look.shirt, 0.62);
+    roundRect(ctx, 1.6 * s, headY + 10.6 * s, 3.6 * s, 6.4 * s, 1.6 * s);
+    ctx.fill();
+  }
+}
+
 function drawHair(
   ctx: CanvasRenderingContext2D,
   look: Appearance,
@@ -1036,6 +1272,11 @@ function drawTray(ctx: CanvasRenderingContext2D, dish: Dish): void {
 
 // ------------------------------------------------------------------- food
 
+export interface PlatedDishOptions {
+  /** Waiting to be collected: adds a warm pool of light behind the plate. */
+  ready?: boolean;
+}
+
 /** A plated dish, sized to sit on a table or a tray. */
 export function drawPlatedDish(
   ctx: CanvasRenderingContext2D,
@@ -1043,10 +1284,20 @@ export function drawPlatedDish(
   cx: number,
   cy: number,
   scale = 1,
+  opts: PlatedDishOptions = {},
 ): void {
   ctx.save();
   ctx.translate(cx, cy);
   ctx.scale(scale, scale);
+  if (opts.ready) {
+    const g = ctx.createRadialGradient(0, -3, 0, 0, -3, 26);
+    g.addColorStop(0, 'rgba(255, 220, 140, 0.6)');
+    g.addColorStop(1, 'rgba(255, 220, 140, 0)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.ellipse(0, -3, 26, 18, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
   drawPlateBase(ctx, dish.plate);
   drawFood(ctx, dish.plate, dish.color, dish.accent);
   ctx.restore();
@@ -1054,25 +1305,36 @@ export function drawPlatedDish(
 
 function drawPlateBase(ctx: CanvasRenderingContext2D, style: PlateStyle): void {
   if (style === 'cup') return;
-  if (style === 'bowl') {
-    ctx.fillStyle = '#e9e4d8';
+  // A contact shadow is what stops plates looking like stickers on the table.
+  ctx.fillStyle = 'rgba(74, 44, 26, 0.22)';
+  ctx.beginPath();
+  ctx.ellipse(1, 1.6, 13, 5.4, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  if (style === 'bowl' || style === 'salad') {
+    ctx.fillStyle = '#fdfaf2';
     ctx.beginPath();
-    ctx.ellipse(0, 0, 12, 6, 0, 0, Math.PI * 2);
+    ctx.ellipse(0, 0, 12.5, 6.2, 0, 0, Math.PI * 2);
     ctx.fill();
-    ctx.fillStyle = '#cfc7b6';
+    ctx.fillStyle = '#d5ccb9';
     ctx.beginPath();
-    ctx.ellipse(0, 0, 9, 4.2, 0, 0, Math.PI * 2);
+    ctx.ellipse(0, 0.4, 9.6, 4.4, 0, 0, Math.PI * 2);
     ctx.fill();
     return;
   }
-  ctx.fillStyle = '#f3efe6';
+  ctx.fillStyle = '#fdfaf2';
   ctx.beginPath();
-  ctx.ellipse(0, 0, 13, 6, 0, 0, Math.PI * 2);
+  ctx.ellipse(0, 0, 14, 6.4, 0, 0, Math.PI * 2);
   ctx.fill();
-  ctx.fillStyle = '#e2dccd';
+  ctx.fillStyle = '#e6dfcd';
   ctx.beginPath();
-  ctx.ellipse(0, 0, 9.5, 4.2, 0, 0, Math.PI * 2);
+  ctx.ellipse(0, 0.3, 10.2, 4.4, 0, 0, Math.PI * 2);
   ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.75)';
+  ctx.lineWidth = 1.1;
+  ctx.beginPath();
+  ctx.ellipse(0, -0.6, 12.6, 5.4, 0, Math.PI * 1.05, Math.PI * 1.95);
+  ctx.stroke();
 }
 
 function drawFood(
@@ -1082,42 +1344,125 @@ function drawFood(
   accent: string,
 ): void {
   switch (style) {
-    case 'burger':
-      ctx.fillStyle = shade(color, 1.1);
-      roundRect(ctx, -7, -10, 14, 5, 2.5);
+    case 'burger': {
+      // Domed sesame bun over a visibly stacked filling: the tallest, roundest
+      // silhouette on the menu, so it never gets mistaken for anything else.
+      ctx.fillStyle = shade(color, 1.14);
+      ctx.beginPath();
+      ctx.moveTo(-8.5, -8.5);
+      ctx.quadraticCurveTo(-8.5, -17, 0, -17);
+      ctx.quadraticCurveTo(8.5, -17, 8.5, -8.5);
+      ctx.closePath();
       ctx.fill();
-      ctx.fillStyle = '#7fbf5a';
-      ctx.fillRect(-7.5, -6, 15, 2);
+      ctx.fillStyle = withAlpha('#fff4d8', 0.9);
+      for (const [sx, sy] of [[-4, -12.6], [0.4, -14.4], [4.4, -11.8]] as const) {
+        ctx.beginPath();
+        ctx.ellipse(sx, sy, 1.5, 0.9, 0.3, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      // Lettuce frill, wider than the bun so it reads as filling spilling out.
+      ctx.fillStyle = '#7cc257';
+      ctx.beginPath();
+      for (let i = 0; i <= 5; i++) {
+        ctx.arc(-9 + i * 3.6, -7.6, 2.1, Math.PI, 0);
+      }
+      ctx.lineTo(9.4, -5.6);
+      ctx.lineTo(-9.4, -5.6);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = '#f2c02e';
+      roundRect(ctx, -8.6, -6, 17.2, 2.4, 1.2);
+      ctx.fill();
       ctx.fillStyle = accent;
-      roundRect(ctx, -7, -4.5, 14, 3.5, 1.4);
+      roundRect(ctx, -8.2, -4.2, 16.4, 3.6, 1.6);
       ctx.fill();
-      ctx.fillStyle = shade(color, 1.05);
-      roundRect(ctx, -7, -1.5, 14, 3.5, 1.6);
+      ctx.fillStyle = shade(color, 1.02);
+      roundRect(ctx, -7.6, -1.2, 15.2, 3.4, 1.7);
       ctx.fill();
       break;
-    case 'fries':
-      ctx.fillStyle = '#d24f3d';
-      roundRect(ctx, -6, -6, 12, 8, 1.5);
-      ctx.fill();
+    }
+    case 'fries': {
+      // Fries fan up out of a carton: a tall, spiky, unmistakable outline.
       ctx.fillStyle = color;
-      for (let i = 0; i < 5; i++) {
+      for (let i = 0; i < 7; i++) {
         ctx.save();
-        ctx.translate(-4.5 + i * 2.3, -7);
-        ctx.rotate((i - 2) * 0.14);
-        ctx.fillRect(-1, -6, 2, 8);
+        ctx.translate(-5.4 + i * 1.8, -6);
+        ctx.rotate((i - 3) * 0.17);
+        ctx.fillStyle = i % 2 === 0 ? color : shade(color, 1.12);
+        roundRect(ctx, -1.3, -11, 2.6, 12, 1);
+        ctx.fill();
         ctx.restore();
       }
+      ctx.fillStyle = '#d24f3d';
+      ctx.beginPath();
+      ctx.moveTo(-7.6, -7.5);
+      ctx.lineTo(7.6, -7.5);
+      ctx.lineTo(5.6, 2.4);
+      ctx.lineTo(-5.6, 2.4);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = '#fff2e2';
+      ctx.beginPath();
+      ctx.moveTo(-7.1, -5.2);
+      ctx.lineTo(7.1, -5.2);
+      ctx.lineTo(6.6, -2.8);
+      ctx.lineTo(-6.6, -2.8);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = 'rgba(120, 30, 20, 0.22)';
+      ctx.beginPath();
+      ctx.moveTo(2.4, -7.5);
+      ctx.lineTo(7.6, -7.5);
+      ctx.lineTo(5.6, 2.4);
+      ctx.lineTo(3.4, 2.4);
+      ctx.closePath();
+      ctx.fill();
       break;
+    }
+    case 'salad': {
+      // A loose pile of leaves with tomato and cucumber: wide, ragged and green.
+      ctx.fillStyle = shade(color, 0.82);
+      ctx.beginPath();
+      ctx.ellipse(0, -2, 9.6, 4.6, 0, 0, Math.PI * 2);
+      ctx.fill();
+      for (let i = 0; i < 7; i++) {
+        const a = (i / 7) * Math.PI * 2 + 0.4;
+        ctx.fillStyle = i % 2 === 0 ? color : shade(color, 1.16);
+        ctx.beginPath();
+        ctx.ellipse(Math.cos(a) * 6, -4 + Math.sin(a) * 2.6, 4.4, 3, a * 0.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      for (const [tx, ty] of [[-4.4, -5.4], [3.6, -6.4]] as const) {
+        ctx.fillStyle = '#e0523c';
+        ctx.beginPath();
+        ctx.arc(tx, ty, 2.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#f4907a';
+        ctx.beginPath();
+        ctx.arc(tx, ty, 1.3, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.fillStyle = '#cfe8a8';
+      ctx.beginPath();
+      ctx.ellipse(0.4, -2.4, 2.6, 1.7, 0.4, 0, Math.PI * 2);
+      ctx.fill();
+      break;
+    }
     case 'bowl':
       ctx.fillStyle = color;
       ctx.beginPath();
-      ctx.ellipse(0, -1.5, 8.5, 4.2, 0, 0, Math.PI * 2);
+      ctx.ellipse(0, -1.5, 9, 4.4, 0, 0, Math.PI * 2);
       ctx.fill();
       ctx.fillStyle = accent;
       ctx.beginPath();
       ctx.ellipse(-2, -2.5, 2.6, 1.5, 0.3, 0, Math.PI * 2);
       ctx.ellipse(3, -1.2, 2.2, 1.3, -0.2, 0, Math.PI * 2);
       ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.ellipse(0, -2.4, 6.4, 2.8, 0, Math.PI * 1.1, Math.PI * 1.9);
+      ctx.stroke();
       break;
     case 'slice':
       ctx.fillStyle = color;

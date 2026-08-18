@@ -48,6 +48,9 @@ export class Simulation {
     for (const c of [...this.game.customers]) this.updateCustomer(c, dt);
     for (const s of this.game.data.staff) this.updateStaff(s, dt);
     this.updateFloaters(realDt);
+    // Decoration runs on wall-clock time, so fast-forward does not turn the
+    // celebrations into a blur.
+    this.game.fx.update(realDt);
   }
 
   // ------------------------------------------------------------- world tick
@@ -292,6 +295,7 @@ export class Simulation {
     this.game.data.stats.customersLost++;
     this.game.recordSatisfaction(0.05);
     this.game.addFloater(reason, c.tx, c.ty, 'bad');
+    this.game.fx.puff(c.tx, c.ty, '#c6a493');
     if (!this.game.data.settings.muted) audio.play('unhappy');
     this.cancelOrderFor(c);
     if (c.tableUid !== null) {
@@ -318,6 +322,7 @@ export class Simulation {
       this.game.earn(paid, { tx: c.tx, ty: c.ty });
       this.game.addXp(Math.round(dish.basePrice * 0.45) + 4, { tx: c.tx, ty: c.ty - 0.4 });
       this.game.data.stats.customersServed++;
+      this.game.fx.coins(c.tx, c.ty, paid / 60);
       if (!this.game.data.settings.muted) audio.play('coin');
     }
 
@@ -808,6 +813,7 @@ export class Simulation {
     holder.plates.push(order.id);
     order.holdingUid = holder.uid;
     order.stoveUid = null;
+    this.game.fx.steam(holder.tx, holder.ty, 0.85);
 
     s.energy = Math.max(0, s.energy - ENERGY_COST.cook);
     this.game.touch();
@@ -947,6 +953,7 @@ export class Simulation {
     s.timer -= dt * workSpeed(s);
     if (s.timer > 0) return;
     table.dirty = false;
+    this.game.fx.clean(table.tx, table.ty);
     s.energy = Math.max(0, s.energy - ENERGY_COST.clean);
     this.game.touch();
     this.resetStaff(s);

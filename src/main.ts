@@ -1,16 +1,16 @@
 import './ui/styles.css';
 
 import { audio } from './engine/audio';
-import { Camera } from './engine/camera';
+import { Camera, MAX_ZOOM, MIN_ZOOM } from './engine/camera';
 import { PointerInput } from './engine/input';
-import { clamp, TILE_H, TILE_W, tileToWorld, type Point } from './engine/iso';
+import { clamp, tileToWorld, type Point } from './engine/iso';
 import { FURNITURE_BY_ID, isWallMounted, resaleValue } from './game/data/furniture';
 import { footprint } from './game/grid';
 import { unlocksAtLevel } from './game/progression';
 import { Simulation } from './game/sim';
 import { createNewGame, Game } from './game/state';
 import type { Placed } from './game/types';
-import { Renderer, type BuildPreview } from './render/renderer';
+import { buildingBox, Renderer, type BuildPreview } from './render/renderer';
 import type { AppApi, ConfirmOptions, PanelId } from './ui/api';
 import { el, fmt } from './ui/dom';
 import { iconSvg } from './ui/icons';
@@ -98,28 +98,39 @@ class App implements AppApi {
     this.camera.setViewport(w, h);
   }
 
-  /** Frame the whole dining room, optionally snapping instantly. */
+  /**
+   * Frame the dining room inside the band the HUD and the dock leave free, so
+   * the room reads as the subject rather than as an island in the streetscape.
+   *
+   * Portrait screens are the awkward case: an isometric room is twice as wide as
+   * it is deep, so fitting its width on a phone would strand it in a field. The
+   * width is deliberately allowed to bleed off the sides instead — the extreme
+   * corners are a pan away — and the height is what gets fitted.
+   */
   private centreCamera(snap = false): void {
-    const size = this.game.data.gridSize;
-    const centre = tileToWorld(size / 2, size / 2);
-    // Margin covers the walls standing above the floor plus a little breathing
-    // room; the fit is then pushed in slightly because letting the room bleed a
-    // touch past the edges looks better than stranding it in empty space, and the
-    // player can always pan.
-    const worldW = size * TILE_W + 120;
-    const worldH = size * TILE_H + 220;
-    const fit = Math.min(this.camera.viewW / worldW, this.camera.viewH / worldH);
-    // A tall phone screen is limited by width, which leaves the room stranded in
-    // empty sky. Push in further there and let it bleed past the sides a little,
-    // since panning is cheap and legible diners matter more.
-    const portrait = this.camera.viewH > this.camera.viewW * 1.3;
-    const zoom = clamp(fit * (portrait ? 1.62 : 1.32), 0.62, 2);
-    // The walls rise above the floor, so nudge the framing down to keep them in
-    // shot. On a phone the dock eats the bottom of the screen instead, so there
-    // the room wants lifting rather than dropping.
-    const yBias = portrait ? -60 : 30;
-    if (snap) this.camera.snapTo(centre.x, centre.y - yBias, zoom);
-    else this.camera.glideTo(centre.x, centre.y - yBias);
+    const { viewW, viewH } = this.camera;
+    const box = buildingBox(this.game.data.gridSize);
+    const portrait = viewH > viewW * 1.3;
+    // Roughly what the status pills and the dock cover at each layout.
+    const insetTop = portrait ? 112 : 66;
+    const insetBottom = portrait ? 104 : 96;
+
+    const availW = Math.max(120, viewW - 16);
+    const availH = Math.max(120, viewH - insetTop - insetBottom);
+    const bleedW = portrait ? 1.72 : 1.06;
+    const bleedH = portrait ? 1.0 : 1.16;
+    const zoom = clamp(
+      Math.min((availW * bleedW) / box.w, (availH * bleedH) / box.h),
+      MIN_ZOOM,
+      MAX_ZOOM,
+    );
+
+    // Pin the middle of the building to the middle of the free band.
+    const bandCentre = insetTop + availH / 2;
+    const x = box.x + box.w / 2;
+    const y = box.y + box.h / 2 + (viewH / 2 - bandCentre) / zoom;
+    if (snap) this.camera.snapTo(x, y, zoom);
+    else this.camera.glideTo(x, y);
   }
 
   start(): void {
@@ -179,6 +190,10 @@ class App implements AppApi {
     if (level === null) return;
     this.game.pendingLevelUp = null;
     audio.play('levelup');
+    // Confetti over the room and a warm flash, so the moment lands in the world
+    // and not only in the card that covers it.
+    const size = this.game.data.gridSize;
+    this.game.fx.levelUp(size / 2, size / 2);
 
     const unlocks = unlocksAtLevel(level);
     const lines: Array<{ label: string; value: string }> = [];
@@ -189,12 +204,16 @@ class App implements AppApi {
     lines.push({ label: 'Menu slots', value: String(this.game.menuCapacity) });
     lines.push({ label: 'Staff positions', value: String(this.game.staffCapacity) });
 
-    this.ui.showInfoModal(
-      `Level ${level}!`,
-      lines,
-      'Word is spreading about your cooking.',
-      'Back to work',
-    );
+    // Let the confetti land before the card covers the room, otherwise the only
+    // celebration the player ever sees is a scrim over the top of it.
+    window.setTimeout(() => {
+      this.ui.showInfoModal(
+        `Level ${level}!`,
+        lines,
+        'Word is spreading about your cooking.',
+        'Back to work',
+      );
+    }, 750);
     this.save();
   }
 

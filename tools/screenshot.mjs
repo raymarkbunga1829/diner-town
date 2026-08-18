@@ -6,6 +6,10 @@
  *
  * Usage:
  *   node tools/screenshot.mjs <url> <out.png> [WIDTHxHEIGHT] [--wait=ms] [--panel=shop] [--zoom=1.4]
+ *
+ * `--clock` and `--eval` poke at the running game through the dev-build handle,
+ * which is how moments that take a while to occur naturally — evening light, a
+ * level-up, a busy service — can be captured without sitting through them.
  */
 
 import { spawn } from 'node:child_process';
@@ -122,6 +126,13 @@ if (clock) {
     expression: `(() => { window.diner.game.data.clock = ${Number(clock)}; })()`,
   });
   await sleep(700);
+}
+
+// Arbitrary setup against the dev handle, e.g. --eval="diner.game.addXp(400)".
+const evaluate = flag('eval', '');
+if (evaluate) {
+  await send('Runtime.evaluate', { expression: evaluate });
+  await sleep(Number(flag('eval-wait', '600')));
 }
 
 // Zoom by feeding the canvas real wheel events, so this goes through the same
