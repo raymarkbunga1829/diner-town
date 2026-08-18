@@ -99,6 +99,7 @@ npm run typecheck # tsc --noEmit
 npm run check     # headless sanity checks (see below)
 npm run deploy    # build and publish to GitHub Pages without Actions
 npm run verify:live <url> [WIDTHxHEIGHT]   # smoke-test a deployed build
+npm run verify:shell <url>                 # is that URL serving this build?
 ```
 
 `npm run check` bundles `tools/checks.ts` with esbuild and runs it under Node. It
@@ -118,6 +119,14 @@ to hand over a recipe and something to buy, the late menu has to stay slow money
 rather than free money, a maxed-out diner has to turn only the experience *past*
 the cap into fame and unlock what the star promised, and none of it may be
 visible to a diner on its first day.
+
+It finishes on the least game-like thing in the repository: it runs the real
+`public/sw.js` in-process against a stand-in cache and network, deploys a second
+build over the first, and insists the shell, the worker and the manifest all come
+back from the network while the fingerprinted bundle comes back from the cache
+untouched — then pulls the plug and insists the game still boots. The same section
+reads `vercel.json` and fails if the worker and the CDN disagree about which URLs
+are safe to keep.
 
 ## Publishing this to your own GitHub repo
 
@@ -148,6 +157,30 @@ publishes the game.
 
 Because Pages serves projects from a subpath, the workflow passes the repository
 name through `BASE_PATH`. For any other host the default (`/`) is correct.
+
+### What may be cached, and for how long
+
+Vite fingerprints its output, which sorts every URL the site serves into two
+kinds. `assets/index-DlPaTXX-.js` is a promise about its bytes — the name changes
+when the contents do — so it is cached for a year and marked `immutable`, both by
+the CDN (`vercel.json`) and by the service worker, which answers it without
+touching the network. `index.html`, `/`, `sw.js` and `manifest.webmanifest` keep
+the same URL across every deploy, so all four are served `max-age=0,
+must-revalidate` and the worker fetches them first and only falls back to its
+cache when there is no network. A cached copy of one of those is exactly how a
+browser ends up running last week's bundle a week after it shipped.
+
+Bumping `CACHE` in `public/sw.js` is what evicts everything an older worker kept:
+`activate` deletes every cache that is not the current one. A player who already
+has an old worker gets the new one on their next visit, and because it claims its
+clients as soon as it activates, the page reloads itself once onto the new build.
+
+`npm run verify:shell <url>` reports on a deployment: it compares the
+fingerprinted entry script in `dist/index.html` with the one the live URL is
+serving and prints the cache headers behind both. Drift is a warning, since a
+deploy that has not landed yet looks the same as a shell someone is holding on to;
+`STRICT=1 npm run verify:shell <url>` turns it into a failure. CI runs it on
+pushes to `main` only, for that reason.
 
 After publishing, the workflow runs the deployed URL through a browser smoke test
 (see below) at both desktop and phone sizes, so a deploy that publishes but does
