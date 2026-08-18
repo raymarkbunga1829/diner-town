@@ -162,6 +162,8 @@ export interface Stats {
   customersServed: number;
   customersLost: number;
   dishesCooked: number;
+  /** Wipes finished, i.e. tables that went from dirty back to clean. */
+  tablesCleaned: number;
   daysOpen: number;
 }
 

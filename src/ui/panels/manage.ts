@@ -158,6 +158,7 @@ function renderOverview(app: AppApi, body: HTMLElement): void {
       kv('Customers served', fmt(s.customersServed)),
       kv('Customers lost', fmt(s.customersLost)),
       kv('Dishes cooked', fmt(s.dishesCooked)),
+      kv('Tables wiped', fmt(s.tablesCleaned)),
       kv('Days trading', fmt(s.daysOpen)),
       kv(
         'Service success',

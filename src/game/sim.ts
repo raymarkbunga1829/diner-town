@@ -153,7 +153,7 @@ export class Simulation {
 
   private updateSpawning(dt: number): void {
     if (!this.game.data.open) return;
-    const seats = this.usableSeats();
+    const seats = this.grid.usableSeats();
     if (seats.length === 0) return;
 
     // Passers-by will not join an endless line.
@@ -229,18 +229,12 @@ export class Simulation {
     return this.game.data.regulars.find((r) => r.id === c.regularId);
   }
 
-  private usableSeats(): Placed[] {
-    return this.game
-      .placedWithRole('chair')
-      .filter((chair) => this.grid.isUsableSeat(chair));
-  }
-
   /** Usable seats nobody has claimed, whether or not their table is clean. */
   private unclaimedSeats(): Placed[] {
     const taken = new Set(
       this.game.customers.map((c) => c.chairUid).filter((u): u is number => u !== null),
     );
-    return this.usableSeats().filter((chair) => !taken.has(chair.uid));
+    return this.grid.usableSeats().filter((chair) => !taken.has(chair.uid));
   }
 
   private freeSeat(): Placed | null {
@@ -581,7 +575,7 @@ export class Simulation {
 
     const chair = clean[0];
     if (!chair) {
-      if (!this.usableSeats().length) {
+      if (!this.grid.usableSeats().length) {
         return refused('No usable seats — a chair only works when it touches a table', at);
       }
       if (!unclaimed.length) return refused('Every seat is taken — place another table', at);
@@ -1267,6 +1261,7 @@ export class Simulation {
     s.timer -= dt * workSpeed(s);
     if (s.timer > 0) return;
     table.dirty = false;
+    this.game.data.stats.tablesCleaned++;
     this.game.fx.clean(table.tx, table.ty);
     s.energy = Math.max(0, s.energy - ENERGY_COST.clean);
     this.game.touch();
@@ -1289,7 +1284,7 @@ export class Simulation {
     if (seconds < 120 || !this.game.data.open) return { seconds, coins: 0, xp: 0 };
 
     this.grid.sync();
-    const seats = this.usableSeats().length;
+    const seats = this.grid.usableSeats().length;
     const stoves = this.game.placedWithRole('stove').length;
     const waiters = this.game.staffByRole('waiter').length;
     const chefs = this.game.staffByRole('chef').length;

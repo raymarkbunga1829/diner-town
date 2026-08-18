@@ -113,7 +113,7 @@ export function createNewGame(restaurantName = 'Diner Town'): SaveData {
     serviceScore: 0.72,
     stats: {
       totalEarned: 0, totalSpent: 0, customersServed: 0,
-      customersLost: 0, dishesCooked: 0, daysOpen: 1,
+      customersLost: 0, dishesCooked: 0, tablesCleaned: 0, daysOpen: 1,
     },
     today: emptyLedger(1),
     lastRecap: null,
