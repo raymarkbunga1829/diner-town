@@ -7,7 +7,13 @@ import { Grid } from './grid';
 import { advanceAlongPath, findPath } from './path';
 import { appearanceFrom, randomName, workSpeed } from './people';
 import { RESTOCK_INTERVAL, type Game } from './state';
-import type { Customer, Order, Placed, Staff } from './types';
+import type { Customer, Order, Placed, Staff, StaffRole } from './types';
+
+/** A position in tile space, used to pick the nearest surface to work from. */
+interface Point {
+  tx: number;
+  ty: number;
+}
 
 /** Seconds a waiter spends writing down an order. */
 const ORDER_SECONDS = 1.6;
@@ -36,6 +42,7 @@ export class Simulation {
     this.game.data.clock += dt;
     this.handleDayRollover();
     this.handleRestock();
+    this.reclaimStalledOrders();
 
     this.updateSpawning(dt);
     for (const c of [...this.game.customers]) this.updateCustomer(c, dt);
@@ -342,13 +349,7 @@ export class Simulation {
   private cancelOrderFor(c: Customer): void {
     if (c.orderId === null) return;
     const order = this.game.orders.find((o) => o.id === c.orderId);
-    if (order) {
-      this.releaseOrderHold(order);
-      this.game.orders = this.game.orders.filter((o) => o.id !== order.id);
-      for (const s of this.game.data.staff) {
-        if (s.targetOrderId === order.id) this.resetStaff(s);
-      }
-    }
+    if (order) this.discardOrder(order);
     c.orderId = null;
   }
 
@@ -361,6 +362,173 @@ export class Simulation {
       if (at >= 0) holder.plates.splice(at, 1);
     }
     order.holdingUid = null;
+  }
+
+  // --------------------------------------------------------- releasing work
+
+  /*
+   * Every way a job can be interrupted — a role switch, a firing, a worker
+   * running out of energy, or the fixture being sold out from under them —
+   * funnels through the helpers below. An order left mid-flight is invisible to
+   * the sim: only `queued` orders are picked up by a chef and only `ready` ones
+   * by a waiter, so a `cooking` order nobody owns pins its stove for the rest of
+   * the session and its guest waits until they walk out.
+   */
+
+  /**
+   * Hand back whatever `s` was carrying or cooking, then stand them down. Safe
+   * to call on an idle worker.
+   */
+  releaseStaffJob(s: Staff): void {
+    if (s.targetOrderId !== null) {
+      const order = this.game.orders.find((o) => o.id === s.targetOrderId);
+      if (order) this.releaseOrder(order, s);
+    }
+    this.resetStaff(s);
+    this.game.touch();
+  }
+
+  /** Switch someone's job without stranding the work they were part-way through. */
+  setStaffRole(s: Staff, role: StaffRole): void {
+    this.releaseStaffJob(s);
+    s.role = role;
+    this.game.touch();
+  }
+
+  /** Let someone go, handing their current job back to the rest of the team. */
+  dismissStaff(s: Staff): void {
+    this.releaseStaffJob(s);
+    this.game.data.staff = this.game.data.staff.filter((x) => x.id !== s.id);
+    this.game.touch();
+  }
+
+  /**
+   * Take a piece of furniture out of the room, detaching everyone and everything
+   * still pointing at it so no order, plate or worker is left waiting on a
+   * fixture that no longer exists.
+   */
+  removeFixture(p: Placed): void {
+    const uid = p.uid;
+    const spot: Point = { tx: p.tx, ty: p.ty };
+    this.game.data.placed = this.game.data.placed.filter((x) => x.uid !== uid);
+    this.game.touch();
+    this.grid.sync();
+
+    for (const order of [...this.game.orders]) {
+      if (order.stoveUid === uid) {
+        order.stoveUid = null;
+        if (order.state === 'cooking') this.returnOrderToKitchen(order);
+      }
+      if (order.holdingUid === uid) {
+        // The plate went out with the fixture, so it needs a new home or a recook.
+        order.holdingUid = null;
+        this.rehomePlate(order, spot);
+      }
+    }
+
+    for (const s of this.game.data.staff) {
+      if (s.targetUid === uid) this.releaseStaffJob(s);
+    }
+
+    for (const c of this.game.customers) {
+      if (c.chairUid !== uid && c.tableUid !== uid) continue;
+      if (c.chairUid === uid) c.chairUid = null;
+      if (c.tableUid === uid) c.tableUid = null;
+      if (c.state === 'entering' || c.state === 'queueing' || c.state === 'leaving') continue;
+      if (c.state === 'walkingToSeat') {
+        // Still on their way over, so they can simply pick another seat.
+        c.state = 'queueing';
+        c.path = [];
+        continue;
+      }
+      this.cancelOrderFor(c);
+      this.sendHome(c);
+    }
+    this.game.touch();
+  }
+
+  /** Put an in-flight order back where somebody else can pick it up. */
+  private releaseOrder(order: Order, from: Point): void {
+    if (order.state === 'cooking') {
+      this.returnOrderToKitchen(order);
+      return;
+    }
+    if (order.state === 'collected') this.rehomePlate(order, from);
+  }
+
+  /**
+   * Park a plate that is in nobody's hands on the nearest free counter. With
+   * every counter full there is nowhere to put it down, so it is binned and the
+   * dish goes back on the kitchen queue rather than vanishing on the guest.
+   */
+  private rehomePlate(order: Order, from: Point): void {
+    const counter = this.freeCounter(from);
+    if (!counter) {
+      this.returnOrderToKitchen(order);
+      return;
+    }
+    counter.plates = counter.plates ?? [];
+    counter.plates.push(order.id);
+    order.holdingUid = counter.uid;
+    order.stoveUid = null;
+    order.state = 'ready';
+    this.game.touch();
+  }
+
+  /** Send an order back to the queue so any chef can cook it again. */
+  private returnOrderToKitchen(order: Order): void {
+    const customer = this.game.customers.find((c) => c.id === order.customerId);
+    if (!customer || customer.state !== 'awaitingFood') {
+      this.discardOrder(order);
+      return;
+    }
+    this.releaseOrderHold(order);
+    order.state = 'queued';
+    order.stoveUid = null;
+    order.progress = 0;
+    this.game.touch();
+  }
+
+  /** Drop an order entirely, leaving nothing pointing at it. */
+  private discardOrder(order: Order): void {
+    this.releaseOrderHold(order);
+    this.game.orders = this.game.orders.filter((o) => o.id !== order.id);
+    const customer = this.game.customers.find((c) => c.id === order.customerId);
+    if (customer?.orderId === order.id) customer.orderId = null;
+    for (const s of this.game.data.staff) {
+      if (s.targetOrderId === order.id) this.resetStaff(s);
+    }
+    this.game.touch();
+  }
+
+  /**
+   * Catch anything that slipped through: an order whose worker is gone, or one
+   * still pointing at furniture that has been sold. Cheap — there are only ever
+   * a handful of live orders — and it means a stalled kitchen recovers on its
+   * own instead of needing a reload.
+   */
+  private reclaimStalledOrders(): void {
+    const door: Point = { tx: this.game.data.doorX, ty: 0 };
+    for (const order of [...this.game.orders]) {
+      if (order.stoveUid !== null && !this.game.placedByUid(order.stoveUid)) {
+        order.stoveUid = null;
+      }
+      if (order.holdingUid !== null && !this.game.placedByUid(order.holdingUid)) {
+        order.holdingUid = null;
+      }
+      const owner = this.game.data.staff.some((s) => s.targetOrderId === order.id);
+      switch (order.state) {
+        case 'cooking':
+          if (!owner || order.stoveUid === null) this.returnOrderToKitchen(order);
+          break;
+        case 'collected':
+          if (!owner) this.rehomePlate(order, door);
+          break;
+        case 'ready':
+          if (order.holdingUid === null) this.rehomePlate(order, door);
+          break;
+      }
+    }
   }
 
   // ------------------------------------------------------------------ staff
@@ -388,7 +556,7 @@ export class Simulation {
       s.energy = Math.max(0, s.energy - dt * 0.22);
     }
     if (s.energy <= 0) {
-      this.abandonJob(s);
+      this.releaseStaffJob(s);
       s.state = 'exhausted';
       return;
     }
@@ -427,18 +595,6 @@ export class Simulation {
       default:
         s.state = 'idle';
     }
-  }
-
-  private abandonJob(s: Staff): void {
-    if (s.targetOrderId !== null) {
-      const order = this.game.orders.find((o) => o.id === s.targetOrderId);
-      if (order && order.state === 'cooking') {
-        order.state = 'queued';
-        order.stoveUid = null;
-        order.progress = 0;
-      }
-    }
-    this.resetStaff(s);
   }
 
   /** Small idle wander so staff do not look frozen. */
@@ -495,10 +651,10 @@ export class Simulation {
     this.tryClean(s);
   }
 
-  private distanceTo(s: Staff, tiles: Array<[number, number]>): number {
+  private distanceTo(from: Point, tiles: Array<[number, number]>): number {
     let best = Infinity;
     for (const [x, y] of tiles) {
-      const d = Math.abs(s.tx - x) + Math.abs(s.ty - y);
+      const d = Math.abs(from.tx - x) + Math.abs(from.ty - y);
       if (d < best) best = d;
     }
     return best;
@@ -658,15 +814,15 @@ export class Simulation {
     this.resetStaff(s);
   }
 
-  private freeCounter(s: Staff): Placed | undefined {
+  private freeCounter(from: Point): Placed | undefined {
     return this.game
       .placedWithRole('counter')
       .filter((c) => {
         const slots = this.game.defOf(c)?.slots ?? 1;
         return (c.plates?.length ?? 0) < slots && this.grid.accessTiles(c).length > 0;
       })
-      .sort((a, b) => this.distanceTo(s, this.grid.accessTiles(a)) -
-        this.distanceTo(s, this.grid.accessTiles(b)))[0];
+      .sort((a, b) => this.distanceTo(from, this.grid.accessTiles(a)) -
+        this.distanceTo(from, this.grid.accessTiles(b)))[0];
   }
 
   private tryDeliverFood(s: Staff): boolean {

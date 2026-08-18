@@ -85,14 +85,7 @@ function renderTeam(app: AppApi, body: HTMLElement): void {
           style: 'padding:5px 8px;font-size:11px',
           text: r.label,
           onclick: () => {
-            member.role = r.id;
-            member.state = 'idle';
-            member.path = [];
-            member.targetCustomerId = null;
-            member.targetOrderId = null;
-            member.targetUid = null;
-            member.carryDishId = null;
-            app.game.touch();
+            app.sim.setStaffRole(member, r.id);
             app.save();
             app.toast(`${member.name} is now a ${r.label.toLowerCase()}`, 'good');
             app.refresh();
@@ -166,8 +159,7 @@ function renderTeam(app: AppApi, body: HTMLElement): void {
                   danger: true,
                 });
                 if (!ok) return;
-                app.game.data.staff = app.game.data.staff.filter((s) => s.id !== member.id);
-                app.game.touch();
+                app.sim.dismissStaff(member);
                 app.save();
                 app.toast(`${member.name} has left`, 'info');
                 app.refresh();

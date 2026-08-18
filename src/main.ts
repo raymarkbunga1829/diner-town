@@ -548,18 +548,10 @@ class App implements AppApi {
     });
     if (!ok) return;
 
-    // Anyone using this piece has to leave before it disappears.
-    for (const c of this.game.customers) {
-      if (c.chairUid === placed.uid || c.tableUid === placed.uid) {
-        c.chairUid = null;
-        c.tableUid = null;
-        c.state = 'leaving';
-        c.path = [];
-      }
-    }
-    this.game.data.placed = this.game.data.placed.filter((p) => p.uid !== placed.uid);
+    // Takes the piece out of the room and detaches anyone still using it, so a
+    // dish being cooked or carried goes back to the kitchen instead of stalling.
+    this.sim.removeFixture(placed);
     this.game.earn(refund, { tx: placed.tx, ty: placed.ty });
-    this.game.touch();
     this.selectedUid = null;
     audio.play('sell');
     this.save();
