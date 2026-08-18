@@ -613,7 +613,7 @@ export class UI {
     // as it always did.
     if (recap.fame > 0 || this.game.data.fame > 0) {
       const fame = fameProgress(this.game.data.fame);
-      rows.push({ label: 'Fame earned', value: `+${fmt(recap.fame)}` });
+      if (recap.fame > 0) rows.push({ label: 'Fame earned', value: `+${fmt(recap.fame)}` });
       rows.push({
         label: 'Fame stars',
         value: `${fame.star} · ${Math.floor(fame.into)}/${fame.span} to the next`,
