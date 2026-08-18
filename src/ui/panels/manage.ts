@@ -227,7 +227,7 @@ function renderRatings(app: AppApi, body: HTMLElement): void {
       label: 'Style',
       value: g.styleScore,
       weight: '30%',
-      tip: `Ambience ${fmt(g.ambience)} of ${fmt(g.ambienceTarget)} needed for this many seats. Buy decor to raise it.`,
+      tip: `Ambience ${fmt(g.ambience)} of ${fmt(g.ambienceTarget)} needed for this many chairs. Buy decor to raise it.`,
     },
     {
       label: 'Service',
@@ -249,15 +249,25 @@ function renderRatings(app: AppApi, body: HTMLElement): void {
     },
   ];
 
+  const chairs = g.chairCount;
+  const usable = g.usableSeatCount;
+  const offline = usable - g.openSeatCount;
+
   body.append(
     el('div', { class: 'card', style: 'margin-bottom:10px' }, [
       el('div', { class: 'row' }, [
         el('span', { class: 'name', text: `${g.rating.toFixed(1)} out of 5 stars` }),
         chip(`A guest arrives every ~${g.spawnInterval.toFixed(1)}s`, 'info'),
       ]),
+      el('div', { class: 'row', style: 'justify-content:flex-start;flex-wrap:wrap' }, [
+        usable < chairs
+          ? chip(`${usable} of ${chairs} chairs can be sat in`, 'warn')
+          : chip(plural(usable, 'usable seat'), 'good'),
+        ...(offline > 0 ? [chip(`${offline} behind dirty tables`, 'warn')] : []),
+      ]),
       el('div', {
         class: 'desc',
-        text: 'Your star rating decides how quickly customers show up. Every point below feeds into it.',
+        text: 'Your star rating and the seats you can actually fill decide how quickly customers show up. A chair only counts when it touches a table someone can walk up to, and a dirty table takes its seats out of service.',
       }),
     ]),
   );

@@ -102,7 +102,7 @@ export function suggestNextAction(
   if (payroll.wages > 0 && payroll.wagesPaid < payroll.wages) {
     return { label: 'Earn more before payroll — or let someone go', target: 'staff' };
   }
-  if (game.seatCount < 4) {
+  if (game.usableSeatCount < 4) {
     return { label: 'Place another table and chair', target: 'shop' };
   }
   if (ledger.walkouts >= 3 && ledger.walkouts > ledger.covers * 0.3) {
@@ -119,7 +119,7 @@ export function suggestNextAction(
   if (game.styleScore < 0.6) {
     return { label: 'Buy some decor to raise Style', target: 'shop' };
   }
-  if (ledger.covers > 0 && game.seatCount < 8) {
+  if (ledger.covers > 0 && game.usableSeatCount < 8) {
     return { label: 'Place another table', target: 'shop' };
   }
   return { label: 'Keep the menu tight so mastery climbs', target: 'menu' };

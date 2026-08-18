@@ -3,6 +3,7 @@ import { Rng } from '../engine/rng';
 import { clamp } from '../engine/iso';
 import { DISHES_BY_ID, dishLevelFromServings, MAX_DISH_LEVEL } from './data/dishes';
 import { FURNITURE_BY_ID, type FurnitureDef } from './data/furniture';
+import { Grid } from './grid';
 import { INGREDIENTS, INGREDIENT_LIST, type IngredientId } from './data/ingredients';
 import { appearanceFrom, makeApplicant } from './people';
 import { emptyLedger, normaliseLedger } from './recap';
@@ -148,8 +149,17 @@ export class Game {
   /** Bumped whenever persistent state changes, so panels can re-render lazily. */
   revision = 0;
 
+  /**
+   * Whether a chair is a seat is a question about the room, not about the save,
+   * so the seat counts have to ask the grid. This one is private and re-syncs off
+   * `revision` like any other, which keeps the answer here identical to the one
+   * the coach and the seating code get from theirs.
+   */
+  private readonly layout: Grid;
+
   constructor(data: SaveData) {
     this.data = data;
+    this.layout = new Grid(this);
     this.uidSeq = data.placed.reduce((m, p) => Math.max(m, p.uid), 0) + 1;
     this.idSeq =
       Math.max(
@@ -363,13 +373,33 @@ export class Game {
     return this.data.placed.reduce((sum, p) => sum + (this.defOf(p)?.ambience ?? 0), 0);
   }
 
-  get seatCount(): number {
+  /** Every chair in the room, sittable or not. Prefer the seat counts below. */
+  get chairCount(): number {
     return this.placedWithRole('chair').length;
   }
 
-  /** Ambience needed for a full style score, scaled to restaurant size. */
+  /** Chairs a guest could be sat in: touching a table, with room to walk up. */
+  get usableSeatCount(): number {
+    this.layout.sync();
+    return this.layout.usableSeats().length;
+  }
+
+  /** Usable seats that are not held out of service by a dirty table. */
+  get openSeatCount(): number {
+    this.layout.sync();
+    return this.layout.openSeats().length;
+  }
+
+  /**
+   * Ambience needed for a full style score, scaled to restaurant size.
+   *
+   * Deliberately still the raw chair count: decor is judged against how big the
+   * room looks, and re-basing it on usable seats would quietly loosen the style
+   * treadmill for every existing save. Arrival rate is the number that has to
+   * mean "seats you can fill" — see `spawnInterval`.
+   */
   get ambienceTarget(): number {
-    return 24 + this.seatCount * 9;
+    return 24 + this.chairCount * 9;
   }
 
   get styleScore(): number {
@@ -411,10 +441,17 @@ export class Game {
     return clamp(score * 5, 0, 5);
   }
 
-  /** Seconds between arrivals given the current rating and seating. */
+  /**
+   * Seconds between arrivals given the current rating and seating.
+   *
+   * Seating means seats the diner can actually serve from: a stool nobody can sit
+   * in pulls in nobody, and a dirty table stops pulling anyone in until it is
+   * wiped. Counting raw chairs let a row of orphan stools summon a crowd into a
+   * four-seat room, and the queue did the rest.
+   */
   get spawnInterval(): number {
     const demand = 0.35 + (this.rating / 5) * 2.25;
-    const seatFactor = Math.max(1, this.seatCount / 4);
+    const seatFactor = Math.max(1, this.openSeatCount / 4);
     return clamp(11 / demand / seatFactor, 1.6, 24);
   }
 
