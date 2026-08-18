@@ -6,6 +6,7 @@ import { PointerInput } from './engine/input';
 import { clamp, tileToWorld, type Point } from './engine/iso';
 import { FURNITURE_BY_ID, isWallMounted, resaleValue } from './game/data/furniture';
 import { footprint } from './game/grid';
+import { nearestActor } from './game/pick';
 import { unlocksAtLevel } from './game/progression';
 import { Simulation, type CommandResult } from './game/sim';
 import { createNewGame, Game } from './game/state';
@@ -814,29 +815,6 @@ class App implements AppApi {
     );
     this.save();
   }
-}
-
-/**
- * The actor closest to a fractional tile pick, if one is near enough to have
- * plausibly been aimed at. Actors are drawn at the centre of their tile, so the
- * comparison is against `tx + 0.5`.
- */
-function nearestActor<T extends { tx: number; ty: number }>(
-  actors: readonly T[],
-  fx: number,
-  fy: number,
-  radius = 0.85,
-): T | null {
-  let best: T | null = null;
-  let bestDistance = radius;
-  for (const a of actors) {
-    const d = Math.hypot(fx - (a.tx + 0.5), fy - (a.ty + 0.5));
-    if (d < bestDistance) {
-      bestDistance = d;
-      best = a;
-    }
-  }
-  return best;
 }
 
 function describeStaffState(state: string): string {

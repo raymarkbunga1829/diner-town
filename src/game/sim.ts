@@ -585,7 +585,13 @@ export class Simulation {
         return refused('No usable seats — a chair only works when it touches a table', at);
       }
       if (!unclaimed.length) return refused('Every seat is taken — place another table', at);
-      return refused('The free seat is still dirty — tap the table to get it wiped', at);
+      // Ring the table that is in the way, so "it is dirty" points at something.
+      const blocked = this.grid.tableForChair(unclaimed[0]!);
+      if (blocked) this.game.fx.command(blocked.tx, blocked.ty);
+      return refused(
+        'The free seat is still dirty — tap the table to get it wiped',
+        blocked ? { tx: blocked.tx, ty: blocked.ty } : at,
+      );
     }
 
     const path = findPath(this.grid, Math.round(c.tx), Math.round(c.ty), this.grid.accessTiles(chair));

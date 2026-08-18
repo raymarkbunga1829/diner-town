@@ -8,6 +8,7 @@
  */
 
 import { TILE_H, TILE_W, TILE_Z, tileToWorld, worldToTile } from '../src/engine/iso';
+import { nearestActor } from '../src/game/pick';
 import {
   cumulativeServings,
   dishLevelFromServings,
@@ -313,6 +314,80 @@ group('Tapping a queueing guest seats them', () => {
 
   const again = sim.seatGuest(guest);
   check('seating a seated guest is a no-op', !again.ok && /already/i.test(again.message));
+});
+
+group('A tap lands on what it looks like it lands on', () => {
+  const game = new Game(createNewGame());
+  const grid = new Grid(game);
+  const sim = new Simulation(game);
+
+  // Actors are drawn at the centre of their tile, and a screen pick inverts to
+  // fractional tile space, so the round trip has to survive both.
+  const pickAt = (tx: number, ty: number): { tx: number; ty: number } => {
+    const w = tileToWorld(tx + 0.5, ty + 0.5);
+    return worldToTile(w.x, w.y);
+  };
+
+  const chef = game.data.staff.find((s) => s.role === 'chef')!;
+  const onChef = pickAt(chef.tx, chef.ty);
+  check(
+    'a pick on a worker finds that worker',
+    nearestActor(game.data.staff, onChef.tx, onChef.ty)?.id === chef.id,
+  );
+  check(
+    'a pick three tiles away finds nobody',
+    nearestActor(game.data.staff, onChef.tx + 3, onChef.ty + 3) === null,
+  );
+  check(
+    'the nearer of two workers wins',
+    nearestActor(game.data.staff, onChef.tx + 0.3, onChef.ty)?.id === chef.id,
+  );
+
+  // The queue is the case that made tile-rounding unusable: it shuffles along on
+  // fractional positions outside the door and never lands on a tile centre.
+  for (const t of game.placedWithRole('table')) t.dirty = true;
+  game.touch();
+  const queued = runUntil(sim, () =>
+    game.customers.filter((c) => c.state === 'queueing').length >= 2, 150);
+  check('a queue formed outside the door', queued);
+  if (!queued) return;
+
+  const queue = game.customers.filter((c) => c.state === 'queueing');
+  check(
+    'the queue really is off-grid',
+    queue.some((c) => Math.abs(c.ty - Math.round(c.ty)) > 0.05),
+    queue.map((c) => c.ty.toFixed(2)).join(', '),
+  );
+  for (const c of queue) {
+    const pick = pickAt(c.tx, c.ty);
+    check(
+      `a pick on ${c.name} in the queue finds them`,
+      nearestActor(game.customers, pick.tx, pick.ty)?.id === c.id,
+    );
+  }
+
+  // And a pick inside a table's footprint has to resolve to the table itself.
+  grid.sync();
+  const table = game.placedWithRole('table')[0]!;
+  const onTable = pickAt(table.tx, table.ty);
+  check(
+    'a pick on a table finds the table',
+    grid.anyAt(Math.floor(onTable.tx), Math.floor(onTable.ty))?.uid === table.uid,
+  );
+  let bare: [number, number] | null = null;
+  for (let y = 0; y < grid.size && !bare; y++) {
+    for (let x = 0; x < grid.size && !bare; x++) {
+      if (!grid.anyAt(x, y)) bare = [x, y];
+    }
+  }
+  check('the room has a bare tile to test with', bare !== null);
+  if (bare) {
+    const onFloor = pickAt(bare[0], bare[1]);
+    check(
+      'a pick on bare floor finds nothing',
+      grid.anyAt(Math.floor(onFloor.tx), Math.floor(onFloor.ty)) === undefined,
+    );
+  }
 });
 
 group('Tapping a dirty table sends somebody to wipe it', () => {
