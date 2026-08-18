@@ -40,6 +40,13 @@ export const SAVE_VERSION = 2;
 /** Market restocks on this cadence (in-game seconds). */
 export const RESTOCK_INTERVAL = 90;
 
+/**
+ * Ambience per floor tile that counts as a fully dressed room — see
+ * `Game.ambienceTarget`. An eight-by-eight starter needs 38 of it, which is a
+ * long shopping list of plants at level 1 and a couple of showpieces later.
+ */
+export const AMBIENCE_PER_TILE = 0.6;
+
 export function createNewGame(restaurantName = 'Diner Town'): SaveData {
   const now = Date.now();
   const r = new Rng(now);
@@ -397,19 +404,34 @@ export class Game {
   }
 
   /**
-   * Ambience needed for a full style score, scaled to restaurant size.
+   * Ambience a fully dressed room of this size would carry.
    *
-   * Deliberately still the raw chair count: decor is judged against how big the
-   * room looks, and re-basing it on usable seats would quietly loosen the style
-   * treadmill for every existing save. Arrival rate is the number that has to
-   * mean "seats you can fill" — see `spawnInterval`.
+   * Judged against the floor rather than the seating. Charging per chair meant
+   * the first hour worked against the player: the coach asks for another table
+   * with a chair on each side, and every one of those chairs used to raise the
+   * bar further than the furniture itself could lift it, so following the
+   * tutorial lowered Style. Expanding the dining room does raise the bar, but
+   * that is a deliberate purchase rather than the coach's homework.
+   *
+   * Arrival rate is the number that has to mean "seats you can fill" — see
+   * `spawnInterval`.
    */
   get ambienceTarget(): number {
-    return 24 + this.chairCount * 9;
+    const tiles = this.data.gridSize * this.data.gridSize;
+    return Math.round(tiles * AMBIENCE_PER_TILE);
   }
 
+  /**
+   * How dressed the room looks, 0..1.
+   *
+   * Square-rooted so the first plant is worth much more than the tenth. A
+   * starter diner then reads as sparse rather than as a failure, while a room
+   * with nothing in it still scores close to nothing, and full marks still take
+   * a floor's worth of decor.
+   */
   get styleScore(): number {
-    return clamp(this.ambience / Math.max(1, this.ambienceTarget), 0, 1);
+    const filled = clamp(this.ambience / Math.max(1, this.ambienceTarget), 0, 1);
+    return Math.sqrt(filled);
   }
 
   get cleanlinessScore(): number {

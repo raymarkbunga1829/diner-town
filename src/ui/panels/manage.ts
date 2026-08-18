@@ -236,7 +236,7 @@ function renderRatings(app: AppApi, body: HTMLElement): void {
       label: 'Style',
       value: g.styleScore,
       weight: '30%',
-      tip: `Ambience ${fmt(g.ambience)} of ${fmt(g.ambienceTarget)} needed for this many chairs. Buy decor to raise it.`,
+      tip: `Ambience ${fmt(g.ambience)} of ${fmt(g.ambienceTarget)} for a dining room this size. Chairs and tables never cost you Style; the first few pieces of decor move it the most, and a bigger floor asks for more of them.`,
     },
     {
       label: 'Service',
