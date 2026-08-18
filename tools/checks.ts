@@ -1180,6 +1180,36 @@ group('Bad text cannot replace a good diner', () => {
   check('and its room is intact', (survivor?.data.placed.length ?? 0) > 0);
 });
 
+group('A replaced diner is not written back on the way out', () => {
+  stubStorage();
+
+  // Leaving the page autosaves, so the session on screen gets one last write
+  // after the player has already asked for a different diner. Without the seal
+  // that write lands on top of the import and nothing appears to have happened.
+  const live = new Game(createNewGame());
+  live.data.coins = 100;
+  check('the live diner is saved', live.save());
+
+  const incoming = new Game(createNewGame());
+  incoming.data.coins = 9000;
+  check('the import takes the slot', installSave(incoming.data));
+
+  live.seal();
+  check('a sealed diner refuses to write', !live.save());
+  check('the import survives the reload', Game.load()?.data.coins === 9000);
+
+  // Same story for starting over: the wipe has to still be a wipe afterwards.
+  const doomed = new Game(createNewGame());
+  check('there is a diner to delete', doomed.save());
+  Game.wipe();
+  doomed.seal();
+  doomed.save();
+  check('starting over stays started over', Game.load() === null);
+
+  // Sealing is about the live slot only, so a rescue copy can still be written.
+  check('a sealed diner can still be backed up', doomed.saveTo(BACKUP_KEY));
+});
+
 group('The backup slot is a second diner', () => {
   const store = stubStorage();
 

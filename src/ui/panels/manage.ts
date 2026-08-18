@@ -404,7 +404,7 @@ function renderSettings(app: AppApi, body: HTMLElement): void {
           if (!ok) return;
           app.game.saveTo(BACKUP_KEY);
           Game.wipe();
-          window.location.reload();
+          reloadInto(app);
         },
       }),
     ]),
@@ -539,7 +539,7 @@ async function loadSave(app: AppApi): Promise<void> {
     return;
   }
   writeSlot(BACKUP_KEY, outgoing);
-  window.location.reload();
+  reloadInto(app);
 }
 
 async function backUp(app: AppApi, existing: SaveSlotInfo | null): Promise<void> {
@@ -583,5 +583,15 @@ async function restoreBackup(app: AppApi): Promise<void> {
     return;
   }
   writeSlot(BACKUP_KEY, outgoing);
+  reloadInto(app);
+}
+
+/**
+ * Hand the browser over to whatever is now in the live slot. Sealing the diner
+ * being replaced is what makes the swap stick: leaving the page autosaves, and
+ * that write would land straight back on top of the one just installed.
+ */
+function reloadInto(app: AppApi): void {
+  app.game.seal();
   window.location.reload();
 }

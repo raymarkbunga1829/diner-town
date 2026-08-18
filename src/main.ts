@@ -955,6 +955,8 @@ class App implements AppApi {
    * told while there is still a session to copy out of Settings.
    */
   save(): void {
+    // A sealed game is on its way out; its slot belongs to another diner now.
+    if (this.game.sealed) return;
     if (this.game.save()) {
       this.saveRefused = false;
       return;

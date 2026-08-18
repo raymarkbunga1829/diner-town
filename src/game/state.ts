@@ -484,9 +484,27 @@ export class Game {
     return JSON.stringify(this.serialise(), null, 2);
   }
 
-  /** False when storage refused the write, e.g. a full quota or private mode. */
+  /** False when the write was refused, or when this game has been sealed. */
   save(): boolean {
+    if (this.isSealed) return false;
     return this.saveTo(SAVE_KEY);
+  }
+
+  private isSealed = false;
+
+  /** True once this game has given up its slot to another one. */
+  get sealed(): boolean {
+    return this.isSealed;
+  }
+
+  /**
+   * Stop this game writing to the live slot, for the moment before a reload that
+   * is meant to replace it. Leaving a page autosaves — `pagehide` and a hidden
+   * tab both do — and that write would put the diner being replaced straight back
+   * over a wipe or an import, so the one the player asked for never arrives.
+   */
+  seal(): void {
+    this.isSealed = true;
   }
 
   saveTo(key: string): boolean {
