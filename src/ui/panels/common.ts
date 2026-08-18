@@ -43,8 +43,10 @@ export function personIcon(
 ): HTMLCanvasElement {
   const { canvas, ctx } = makeCanvas(size, size);
   ctx.save();
-  ctx.translate(size / 2, size * 0.94);
-  const s = size / 56;
+  ctx.translate(size / 2, size * 0.97);
+  // Room for a chef's hat: the tallest thing a figure can be wearing decides how
+  // big the figure itself can be drawn in a fixed-size card.
+  const s = size / 64;
   ctx.scale(s, s);
   drawPerson(ctx, look, 0, 0, {
     facing: 'se',
@@ -52,6 +54,7 @@ export function personIcon(
     walking: false,
     sitting: false,
     uniform: role ? UNIFORM[role] : undefined,
+    role,
   });
   ctx.restore();
   return canvas;

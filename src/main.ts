@@ -204,12 +204,16 @@ class App implements AppApi {
     lines.push({ label: 'Menu slots', value: String(this.game.menuCapacity) });
     lines.push({ label: 'Staff positions', value: String(this.game.staffCapacity) });
 
-    this.ui.showInfoModal(
-      `Level ${level}!`,
-      lines,
-      'Word is spreading about your cooking.',
-      'Back to work',
-    );
+    // Let the confetti land before the card covers the room, otherwise the only
+    // celebration the player ever sees is a scrim over the top of it.
+    window.setTimeout(() => {
+      this.ui.showInfoModal(
+        `Level ${level}!`,
+        lines,
+        'Word is spreading about your cooking.',
+        'Back to work',
+      );
+    }, 750);
     this.save();
   }
 

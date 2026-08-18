@@ -110,6 +110,7 @@ export class Renderer {
     const dayT = timeOfDay(this.game.data.clock);
     const sky = skyPalette(dayT);
     const night = this.darkness(dayT);
+    this.updateBounds();
 
     ctx.save();
     ctx.clearRect(0, 0, camera.viewW, camera.viewH);
@@ -158,6 +159,32 @@ export class Renderer {
     // of the day; there is no dawn to account for.
     if (dayT < 0.66) return 0;
     return Math.min(1, (dayT - 0.66) / 0.26);
+  }
+
+  /** World-space bounds of the viewport, refreshed once a frame. */
+  private bounds = { x0: 0, y0: 0, x1: 0, y1: 0 };
+
+  private updateBounds(): void {
+    const { camera } = this;
+    const tl = camera.screenToWorld(0, 0);
+    const br = camera.screenToWorld(camera.viewW, camera.viewH);
+    this.bounds = { x0: tl.x, y0: tl.y, x1: br.x, y1: br.y };
+  }
+
+  /**
+   * Whether a prop standing on this tile could show up on screen. The town keeps
+   * generating shopfronts and trees well past the edges of the view, and drawing
+   * the ones nobody can see is the easiest frame time there is to give back.
+   */
+  private inView(tx: number, ty: number, height = 1, spread = 44): boolean {
+    const w = tileToWorld(tx + 0.5, ty + 0.5);
+    const b = this.bounds;
+    return (
+      w.x + spread > b.x0 &&
+      w.x - spread < b.x1 &&
+      w.y + 32 > b.y0 &&
+      w.y - height * TILE_Z - 32 < b.y1
+    );
   }
 
   /** The range of tiles currently on screen, padded so nothing pops in at the edge. */
@@ -229,25 +256,26 @@ export class Renderer {
     return d >= Renderer.TERRACE_FROM && d <= Renderer.TERRACE_TO;
   }
 
-  /** Where a tile falls in the block lattice used beyond the ring road. */
-  private plotOf(tx: number, ty: number): {
-    street: boolean;
-    kind: 'park' | 'build' | 'square';
-    bx: number;
-    by: number;
-  } {
+  /**
+   * The block lattice used beyond the terrace. Split into two allocation-free
+   * lookups rather than one descriptor, because the ground pass asks about every
+   * visible tile on every frame.
+   */
+  private isLatticeStreet(tx: number, ty: number): boolean {
     const { BLOCK, STREET } = Renderer;
-    const bx = Math.floor(tx / BLOCK);
-    const by = Math.floor(ty / BLOCK);
-    const ix = tx - bx * BLOCK;
-    const iy = ty - by * BLOCK;
-    const roll = tileNoise(bx * 31 + 11, by * 17 + 5);
-    return {
-      street: ix < STREET || iy < STREET,
-      kind: roll < 0.62 ? 'build' : roll < 0.88 ? 'park' : 'square',
-      bx,
-      by,
-    };
+    return (
+      tx - Math.floor(tx / BLOCK) * BLOCK < STREET ||
+      ty - Math.floor(ty / BLOCK) * BLOCK < STREET
+    );
+  }
+
+  private plotKind(tx: number, ty: number): 'park' | 'build' | 'square' {
+    const { BLOCK } = Renderer;
+    const roll = tileNoise(
+      Math.floor(tx / BLOCK) * 31 + 11,
+      Math.floor(ty / BLOCK) * 17 + 5,
+    );
+    return roll < 0.62 ? 'build' : roll < 0.88 ? 'park' : 'square';
   }
 
   /**
@@ -310,12 +338,10 @@ export class Renderer {
           continue;
         }
 
-        const plot = this.plotOf(tx, ty);
-        if (plot.street) {
+        if (this.isLatticeStreet(tx, ty)) {
           drawRoadTile(ctx, c.x, c.y, n, { dash: (tx + ty) % 4 === 0 });
-        } else if (plot.kind === 'park') {
-          const spine = this.parkSpine(tx, ty);
-          if (spine) drawPathTile(ctx, c.x, c.y, n);
+        } else if (this.plotKind(tx, ty) === 'park') {
+          if (this.parkSpine(tx, ty)) drawPathTile(ctx, c.x, c.y, n);
           else drawLawnTile(ctx, c.x, c.y, n);
         } else {
           drawPlazaTile(ctx, c.x, c.y, n);
@@ -346,6 +372,7 @@ export class Renderer {
     for (let ty = view.minTy; ty <= view.maxTy; ty++) {
       for (let tx = view.minTx; tx <= view.maxTx; tx++) {
         if (this.ringOf(tx, ty) !== 'verge' || this.isApproach(tx, ty)) continue;
+        if (!this.inView(tx, ty, 2)) continue;
         const roll = tileNoise(tx * 17 + 3, ty * 41 + 9);
         const c = this.tileCentre(tx, ty);
         if (roll > 0.56) {
@@ -359,6 +386,7 @@ export class Renderer {
       }
     }
     for (const [tx, ty] of this.streetLampTiles()) {
+      if (!this.inView(tx, ty, 1.6)) continue;
       const c = this.tileCentre(tx, ty);
       out.push({
         depth: depthOf(tx, ty, 2),
@@ -372,14 +400,14 @@ export class Renderer {
     for (let by = Math.floor(view.minTy / BLOCK); by <= Math.floor(view.maxTy / BLOCK); by++) {
       for (let bx = Math.floor(view.minTx / BLOCK); bx <= Math.floor(view.maxTx / BLOCK); bx++) {
         const inner = BLOCK - STREET;
-        const plot = this.plotOf(bx * BLOCK + STREET, by * BLOCK + STREET);
+        const kind = this.plotKind(bx * BLOCK + STREET, by * BLOCK + STREET);
         const seed = bx * 137 + by * 29;
         // Blocks that only partly clear the ring road are built on as far as they
         // reach. Insisting on a whole clear block is what left the near field bare.
         const rect = this.buildableRect(bx * BLOCK + STREET, by * BLOCK + STREET, inner);
         if (!rect) continue;
 
-        if (plot.kind === 'build' && rect.w >= 2 && rect.h >= 2) {
+        if (kind === 'build' && rect.w >= 2 && rect.h >= 2) {
           // Wide plots take a terrace of two, which stops every street looking
           // like a row of warehouses.
           const span = Math.min(rect.w, rect.h) - 0.2;
@@ -392,13 +420,14 @@ export class Renderer {
             : [[rect.x + rect.w / 2, rect.y + rect.h / 2, span]];
           units.forEach(([cx, cy, s], i) => {
             const height = 1.6 + tileNoise(seed + i * 11, 9) * 2.3;
+            if (!this.inView(cx - 0.5, cy - 0.5, height + 0.4, s * 40)) return;
             const c = tileToWorld(cx, cy);
             out.push({
               depth: depthOf(cx, cy, height),
               draw: () => drawShopBlock(ctx, c.x, c.y, s, height, seed + i * 17, night),
             });
           });
-        } else if (plot.kind === 'park' || rect.w < 2 || rect.h < 2) {
+        } else if (kind === 'park' || rect.w < 2 || rect.h < 2) {
           this.collectPark(out, rect, time, seed);
         } else {
           // A paved square: stalls in the middle, trees around the edge.
@@ -407,6 +436,7 @@ export class Renderer {
               const edge =
                 tx === rect.x || ty === rect.y ||
                 tx === rect.x + rect.w - 1 || ty === rect.y + rect.h - 1;
+              if (!this.inView(tx, ty, 2)) continue;
               const roll = tileNoise(tx * 23 + 1, ty * 13 + 4);
               const c = this.tileCentre(tx, ty);
               if (edge && roll > 0.6) {
@@ -463,6 +493,7 @@ export class Renderer {
         const cy = side % 2 === 0 ? across : along;
         const seed = Math.round(cx * 71 + cy * 131 + side * 17);
         const roll = tileNoise(seed, seed + 5);
+        if (!this.inView(cx, cy, 5, UNIT * 34)) continue;
         const c = tileToWorld(cx + 0.5, cy + 0.5);
 
         // Roughly one plot in eight is a garden rather than a shop, which stops
@@ -546,6 +577,7 @@ export class Renderer {
     const { ctx } = this;
     for (let ty = rect.y; ty < rect.y + rect.h; ty++) {
       for (let tx = rect.x; tx < rect.x + rect.w; tx++) {
+        if (!this.inView(tx, ty, 2)) continue;
         const c = this.tileCentre(tx, ty);
         const onPath = this.parkSpine(tx, ty);
         const edge =

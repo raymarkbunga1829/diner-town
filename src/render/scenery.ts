@@ -584,12 +584,14 @@ export function drawPaveTile(
   /** Kerb faces to drop, as offsets towards the neighbouring road tile. */
   kerbs: ReadonlyArray<readonly [number, number]> = [],
 ): void {
+  // One fill and one stroke rather than a stacked slab: the pavement covers a
+  // large share of the screen, so it is the last place to spend fill rate.
   diamondPath(ctx, cx, cy, 1, 1);
-  ctx.fillStyle = tone(WORLD.paveJoint, 0.9);
-  ctx.fill();
-  diamondPath(ctx, cx, cy - 2, 0.94, 0.94);
   ctx.fillStyle = tone(WORLD.pave, 0.95 + n * 0.11);
   ctx.fill();
+  ctx.strokeStyle = alpha(WORLD.paveJoint, 0.55);
+  ctx.lineWidth = 1;
+  ctx.stroke();
 
   // The kerb is the 2px step down to the asphalt. Small, but it is what makes
   // the pavement read as a pavement rather than as lighter tarmac.
@@ -597,7 +599,7 @@ export function drawPaveTile(
     const ex = ((dx - dy) * TILE_W) / 2;
     const ey = ((dx + dy) * TILE_H) / 2;
     const px = cx + ex / 2;
-    const py = cy + ey / 2 - 2;
+    const py = cy + ey / 2;
     const ax = -ey / 2;
     const ay = ex / 2;
     ctx.fillStyle = tone(WORLD.pave, 0.72);
@@ -625,13 +627,16 @@ export function drawLawnTile(
   ctx.fillStyle = tone(WORLD.grass, 0.94 + n * 0.14);
   ctx.fill();
 
-  // Mown banding, which reads as a kept lawn rather than a green diamond.
-  ctx.strokeStyle = alpha('#ffffff', 0.07);
-  ctx.lineWidth = 5;
-  ctx.beginPath();
-  ctx.moveTo(cx - TILE_W * 0.42, cy - TILE_H * 0.04);
-  ctx.lineTo(cx + TILE_W * 0.06, cy + TILE_H * 0.2);
-  ctx.stroke();
+  // Mown banding on some tiles, so it reads as a kept lawn rather than a green
+  // diamond. Every tile would be both busier and slower.
+  if (n > 0.45) {
+    ctx.strokeStyle = alpha('#ffffff', 0.07);
+    ctx.lineWidth = 5;
+    ctx.beginPath();
+    ctx.moveTo(cx - TILE_W * 0.42, cy - TILE_H * 0.04);
+    ctx.lineTo(cx + TILE_W * 0.06, cy + TILE_H * 0.2);
+    ctx.stroke();
+  }
 
   // An occasional bed of flowers, kept as one tight clump rather than scattered
   // across the tile, which just read as confetti dropped on the grass.
@@ -778,42 +783,66 @@ export function drawShopBlock(
     ctx.save();
     const w = facadePlane(ctx, cx, cy, span, side);
     const lit = side === 'right' ? 1 : 0.84;
+    // Colours are hoisted out of the loops below: a street of shops is drawn every
+    // frame, so anything that builds a colour string per window shows up on a phone.
+    const reveal = tone(wall, lit * 0.72);
+    const glassOff = mix(tone('#8fa9bb', lit), '#ffdf9e', night * 0.12);
+    const glassOn = mix(tone('#8fa9bb', lit), '#ffdf9e', night);
+    const bandA = tone(awning, lit);
+    const bandB = tone('#fff2dc', lit);
 
     // Shopfront: a door and a wide pane, with warm light spilling out at night.
-    const glass = mix(shade('#9fb6c2', lit), '#ffd89a', night * 0.85);
-    ctx.fillStyle = glass;
+    ctx.fillStyle = mix(tone('#9fb6c2', lit), '#ffd89a', night * 0.85);
     ctx.fillRect(w * 0.08, -shopH * TILE_Z + 3, w * 0.5, shopH * TILE_Z - 6);
-    ctx.fillStyle = shade('#6f4a33', lit);
+    ctx.fillStyle = tone('#6f4a33', lit);
     ctx.fillRect(w * 0.66, -shopH * TILE_Z + 3, w * 0.2, shopH * TILE_Z - 3);
     ctx.fillStyle = alpha('#ffffff', 0.16);
     ctx.fillRect(w * 0.08, -shopH * TILE_Z + 3, w * 0.5, 3);
 
-    // Striped valance hanging off the canopy above the shopfront.
+    // Striped valance hanging off the canopy above the shopfront. Each colour is
+    // one path, so the whole valance costs two fills however many stripes it has.
     const vy = -canopyH * TILE_Z;
     const bands = Math.max(3, Math.round(w / 11));
-    for (let i = 0; i < bands; i++) {
-      ctx.fillStyle = i % 2 === 0 ? shade(awning, lit) : shade('#fff2dc', lit);
-      ctx.fillRect(w * 0.02 + (i * w * 0.96) / bands, vy, (w * 0.96) / bands + 0.6, 9);
+    const bandW = (w * 0.96) / bands;
+    for (const parity of [0, 1]) {
+      ctx.fillStyle = parity === 0 ? bandA : bandB;
+      ctx.beginPath();
+      for (let i = parity; i < bands; i += 2) {
+        ctx.rect(w * 0.02 + i * bandW, vy, bandW + 0.6, 9);
+      }
+      ctx.fill();
     }
     ctx.fillStyle = alpha('#2b1c14', 0.18);
     ctx.fillRect(w * 0.02, vy + 7.4, w * 0.96, 1.8);
 
-    // Upper windows, in rows that stop below the parapet.
-    const rows = Math.max(1, Math.floor((height - shopH) / 0.62));
-    const cols = Math.max(2, Math.round(w / 17));
+    // Upper windows, in rows that stop below the parapet. Reveals, dark panes and
+    // lit panes are each batched into a single path for the same reason.
+    const rows = Math.max(1, Math.min(4, Math.floor((height - shopH) / 0.72)));
+    const cols = Math.max(2, Math.min(4, Math.round(w / 20)));
+    const cellW = (w * 0.8) / cols;
+    const paths: [string, Array<[number, number]>][] = [
+      [reveal, []],
+      [glassOff, []],
+      [glassOn, []],
+    ];
     for (let r = 0; r < rows; r++) {
-      const wy = -(shopH + 0.36 + r * 0.62) * TILE_Z;
+      const wy = -(shopH + 0.42 + r * 0.72) * TILE_Z;
       for (let c = 0; c < cols; c++) {
-        const wx = w * 0.1 + (c * w * 0.8) / cols;
-        const on = tileNoise(seed + r * 13 + c * 5, seed + c) < 0.55 ? night : night * 0.12;
-        ctx.fillStyle = shade(wall, lit * 0.72);
-        roundRect(ctx, wx - 1, wy - 1, (w * 0.8) / cols - 3, 15, 2);
-        ctx.fill();
-        ctx.fillStyle = mix(shade('#8fa9bb', lit), '#ffdf9e', on);
-        roundRect(ctx, wx, wy, (w * 0.8) / cols - 5, 13, 1.5);
-        ctx.fill();
+        const wx = w * 0.1 + c * cellW;
+        paths[0]![1].push([wx - 1, wy - 1]);
+        const on = tileNoise(seed + r * 13 + c * 5, seed + c) < 0.55;
+        paths[on ? 2 : 1]![1].push([wx, wy]);
       }
     }
+    paths.forEach(([colour, boxes], i) => {
+      if (!boxes.length) return;
+      ctx.fillStyle = colour;
+      ctx.beginPath();
+      for (const [bx, by] of boxes) {
+        ctx.rect(bx, by, cellW - (i === 0 ? 3 : 5), i === 0 ? 15 : 13);
+      }
+      ctx.fill();
+    });
     ctx.restore();
   }
 
@@ -822,18 +851,19 @@ export function drawShopBlock(
   isoBox(ctx, cx, cy, span * 1.06, span * 1.06, 0.16, faces(shade(wall, 0.82)), height);
   // A roof deck inside the parapet. Without its own colour the top face is just a
   // pale slab of wall, and from this camera angle that is most of the building.
-  diamondPath(ctx, cx, cy - (height + 0.16) * TILE_Z, span * 0.94, span * 0.94);
-  ctx.fillStyle = tone('#9b9587', 1);
+  const deckY = cy - (height + 0.16) * TILE_Z;
+  diamondPath(ctx, cx, deckY, span * 0.94, span * 0.94);
+  ctx.fillStyle = '#9b9587';
   ctx.fill();
   ctx.strokeStyle = alpha('#6f6a5e', 0.4);
   ctx.lineWidth = 1;
-  for (let i = -2; i <= 2; i++) {
-    const off = i * span * 6;
-    ctx.beginPath();
-    ctx.moveTo(cx - TILE_W * span * 0.46, cy - (height + 0.16) * TILE_Z + off);
-    ctx.lineTo(cx + TILE_W * span * 0.46, cy - (height + 0.16) * TILE_Z + off + TILE_H * span * 0.46);
-    ctx.stroke();
+  ctx.beginPath();
+  for (let i = -1; i <= 1; i++) {
+    const off = i * span * 8;
+    ctx.moveTo(cx - TILE_W * span * 0.46, deckY + off);
+    ctx.lineTo(cx + TILE_W * span * 0.46, deckY + off + TILE_H * span * 0.46);
   }
+  ctx.stroke();
 
   // Roof clutter: a tank, a vent or a stair head, so the skyline is not a plateau.
   const roll = tileNoise(seed + 21, seed - 4);
