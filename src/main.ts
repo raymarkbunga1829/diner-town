@@ -17,7 +17,13 @@ import {
 import { createNewGame, Game } from './game/state';
 import type { Customer, Placed } from './game/types';
 import { buildingBox, Renderer, type BuildPreview } from './render/renderer';
-import type { AppApi, ConfirmOptions, PanelId } from './ui/api';
+import type {
+  AppApi,
+  ConfirmOptions,
+  PanelId,
+  TextExportOptions,
+  TextImportOptions,
+} from './ui/api';
 import { el, fmt } from './ui/dom';
 import { iconSvg } from './ui/icons';
 import { createManagePanel } from './ui/panels/manage';
@@ -930,15 +936,35 @@ class App implements AppApi {
     return this.ui.promptText(title, message, value);
   }
 
+  showTextExport(options: TextExportOptions): void {
+    this.ui.showTextExport(options);
+  }
+
+  promptImportText(options: TextImportOptions): Promise<string | null> {
+    return this.ui.promptImportText(options);
+  }
+
   focusTile(tx: number, ty: number): void {
     const w = tileToWorld(tx + 0.5, ty + 0.5);
     this.camera.glideTo(w.x, w.y);
   }
 
+  /**
+   * Autosave, and say so the once when the browser refuses it. A save that is
+   * quietly dropped is how a diner disappears without warning, so the player is
+   * told while there is still a session to copy out of Settings.
+   */
   save(): void {
-    this.game.save();
+    if (this.game.save()) {
+      this.saveRefused = false;
+      return;
+    }
+    if (this.saveRefused) return;
+    this.saveRefused = true;
+    this.toast('This browser would not store your progress — copy your save from Manage', 'bad');
   }
 
+  private saveRefused = false;
 }
 
 /** Whether this guest has a bubble or a name plate floating over them. */

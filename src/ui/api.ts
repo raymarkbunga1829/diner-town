@@ -26,6 +26,22 @@ export interface ConfirmOptions {
   danger?: boolean;
 }
 
+/** A block of text handed to the player to copy out or download. */
+export interface TextExportOptions {
+  title: string;
+  message: string;
+  text: string;
+  /** Suggested name for the downloaded file. */
+  filename: string;
+}
+
+export interface TextImportOptions {
+  title: string;
+  message: string;
+  confirmLabel?: string;
+  placeholder?: string;
+}
+
 /** The surface panels use to talk back to the running game. */
 export interface AppApi {
   readonly game: Game;
@@ -41,6 +57,10 @@ export interface AppApi {
   exitBuild(): void;
   confirm(options: ConfirmOptions): Promise<boolean>;
   promptText(title: string, message: string, value: string): Promise<string | null>;
+  /** Show text to copy or download, e.g. the save. */
+  showTextExport(options: TextExportOptions): void;
+  /** Ask for a block of text, pasted or picked from a file. */
+  promptImportText(options: TextImportOptions): Promise<string | null>;
   /** Pan the camera to a tile, e.g. to show what a purchase affected. */
   focusTile(tx: number, ty: number): void;
   save(): void;

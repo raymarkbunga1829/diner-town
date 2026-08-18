@@ -4,12 +4,21 @@ import { REGULARS_BY_ID } from '../../game/data/regulars';
 import {
   canExpand,
   DAY_LENGTH,
+  dayNumber,
   expansionCost,
   expansionLevel,
   MAX_GRID,
 } from '../../game/progression';
 import { favouriteFor, regularLook } from '../../game/regulars';
-import { Game } from '../../game/state';
+import {
+  BACKUP_KEY,
+  Game,
+  importSaveText,
+  installSave,
+  slotInfo,
+  writeSlot,
+  type SaveSlotInfo,
+} from '../../game/state';
 import type { AppApi, Panel } from '../api';
 import { el, fmt, plural } from '../dom';
 import { iconSvg } from '../icons';
@@ -374,6 +383,8 @@ function renderSettings(app: AppApi, body: HTMLElement): void {
     ]),
   );
 
+  renderSaveTools(app, body);
+
   body.append(
     el('div', { class: 'section-title', text: 'Danger zone' }),
     el('div', { class: 'card' }, [
@@ -385,15 +396,192 @@ function renderSettings(app: AppApi, body: HTMLElement): void {
         onclick: async () => {
           const ok = await app.confirm({
             title: 'Delete this restaurant?',
-            message: 'Your coins, staff, recipes and layout will all be lost. This cannot be undone.',
+            message:
+              'Your coins, staff, recipes and layout are all cleared. A copy goes to the backup slot, but copy your save out first if you want to keep this diner for good.',
             confirmLabel: 'Delete everything',
             danger: true,
           });
           if (!ok) return;
+          app.game.saveTo(BACKUP_KEY);
           Game.wipe();
           window.location.reload();
         },
       }),
     ]),
   );
+}
+
+/**
+ * Everything that gets a diner off this one browser. The save lives in a single
+ * `localStorage` key, and a key is one eviction, one cleared site data or one
+ * mistap away from gone, so the player is given a copy they own and a second
+ * slot to fall back on.
+ */
+function renderSaveTools(app: AppApi, body: HTMLElement): void {
+  const backup = slotInfo(BACKUP_KEY);
+
+  body.append(
+    el('div', { class: 'section-title', text: 'Your save' }),
+    el('div', { class: 'card' }, [
+      el('div', {
+        class: 'desc',
+        text: 'Your diner is stored in this browser only. Keep a copy of the text and you can bring it back here, or carry it to another browser or phone.',
+      }),
+      el('div', { class: 'row' }, [
+        el('button', {
+          class: 'btn primary',
+          text: 'Copy save',
+          onclick: () => {
+            app.save();
+            app.showTextExport({
+              title: 'Your diner as text',
+              message:
+                'Keep this somewhere safe — a note to yourself, a file, an email. Paste it back in to carry on from exactly here.',
+              text: app.game.exportText(),
+              filename: saveFilename(app.game),
+            });
+          },
+        }),
+        el('button', {
+          class: 'btn',
+          text: 'Load a save',
+          onclick: () => void loadSave(app),
+        }),
+      ]),
+    ]),
+  );
+
+  body.append(
+    el('div', { class: 'card', style: 'margin-top:8px' }, [
+      el('div', { class: 'row' }, [
+        el('span', { class: 'name', text: 'Backup diner' }),
+        backup
+          ? chip(`Day ${backup.day} · ${fmt(backup.coins)} coins`, 'info')
+          : chip('Nothing saved yet'),
+      ]),
+      el('div', {
+        class: 'desc',
+        text: backup
+          ? `${backup.restaurantName}, kept ${ageLabel(backup.savedAt)}. Restoring swaps it with the diner you are playing now, so neither one is lost.`
+          : 'A second copy in this browser, so starting over or a stray tap is not the end of the diner. It is the same browser, so keep the text copy too.',
+      }),
+      el('div', { class: 'row' }, [
+        el('button', {
+          class: 'btn',
+          text: backup ? 'Replace backup' : 'Back up now',
+          onclick: () => void backUp(app, backup),
+        }),
+        el('button', {
+          class: 'btn',
+          text: 'Restore backup',
+          disabled: !backup,
+          onclick: () => void restoreBackup(app),
+        }),
+      ]),
+    ]),
+  );
+}
+
+/** `corner-spoon-day-6.json`, so a folder of copies is still readable later. */
+function saveFilename(game: Game): string {
+  const slug = game.data.restaurantName
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '');
+  return `${slug || 'diner-town'}-day-${game.dayNumber}.json`;
+}
+
+function ageLabel(savedAt: number): string {
+  const minutes = Math.round((Date.now() - savedAt) / 60000);
+  if (!savedAt || minutes < 2) return 'just now';
+  if (minutes < 60) return `${minutes} minutes ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${plural(hours, 'hour')} ago`;
+  return `${plural(Math.round(hours / 24), 'day')} ago`;
+}
+
+/**
+ * Paste or pick a save, then say what it is before it replaces anything. The
+ * text is only checked here — nothing is written until the player has seen whose
+ * diner they are about to load — and a payload that will not open leaves the
+ * running game exactly as it was.
+ */
+async function loadSave(app: AppApi): Promise<void> {
+  const text = await app.promptImportText({
+    title: 'Load a saved diner',
+    message:
+      'Paste the text you copied, or pick the file you downloaded. Nothing is replaced until you have seen what is in it.',
+    confirmLabel: 'Read it',
+  });
+  if (text === null) return;
+
+  const read = importSaveText(text);
+  if (!read.ok) {
+    app.toast(read.message, 'bad');
+    return;
+  }
+
+  const incoming = read.game.data;
+  const ok = await app.confirm({
+    title: 'Load this diner?',
+    message: `${incoming.restaurantName} — level ${incoming.level}, ${fmt(incoming.coins)} coins on day ${dayNumber(incoming.clock)}. It replaces the diner you are playing now, which is copied to the backup slot first.`,
+    confirmLabel: 'Load it',
+    danger: true,
+  });
+  if (!ok) return;
+
+  // The live diner is taken as text before anything moves and only written to
+  // the backup slot once the import is safely in place, so a refused write
+  // leaves both slots as they were.
+  const outgoing = JSON.stringify(app.game.serialise());
+  if (!installSave(incoming)) {
+    app.toast('This browser would not store the save, so nothing was changed', 'bad');
+    return;
+  }
+  writeSlot(BACKUP_KEY, outgoing);
+  window.location.reload();
+}
+
+async function backUp(app: AppApi, existing: SaveSlotInfo | null): Promise<void> {
+  if (existing) {
+    const ok = await app.confirm({
+      title: 'Replace the backup?',
+      message: `The backup from day ${existing.day} is overwritten with the diner you are playing now.`,
+      confirmLabel: 'Replace it',
+    });
+    if (!ok) return;
+  }
+  if (!app.game.saveTo(BACKUP_KEY)) {
+    app.toast('This browser would not store the backup — copy your save instead', 'bad');
+    return;
+  }
+  audio.play('tap');
+  app.toast('Backed up in this browser', 'good');
+  app.refresh();
+}
+
+async function restoreBackup(app: AppApi): Promise<void> {
+  // Read the backup before anything is written, so a slot that turns out to be
+  // unreadable cannot cost the player the diner they are playing.
+  const restored = Game.loadSlot(BACKUP_KEY);
+  if (!restored) {
+    app.toast('The backup could not be read, so nothing was changed', 'bad');
+    return;
+  }
+
+  const ok = await app.confirm({
+    title: 'Restore the backup?',
+    message: `${restored.data.restaurantName} — level ${restored.data.level}, ${fmt(restored.data.coins)} coins on day ${restored.dayNumber}. The diner you are playing now takes its place in the backup slot.`,
+    confirmLabel: 'Restore it',
+    danger: true,
+  });
+  if (!ok) return;
+
+  const outgoing = JSON.stringify(app.game.serialise());
+  if (!installSave(restored.data)) {
+    app.toast('This browser would not store the save, so nothing was changed', 'bad');
+    return;
+  }
+  writeSlot(BACKUP_KEY, outgoing);
+  window.location.reload();
 }
