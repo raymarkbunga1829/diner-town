@@ -9,7 +9,16 @@
  */
 
 import { TILE_H, TILE_W, TILE_Z } from '../engine/iso';
-import { diamondPath, faces, isoBox, mix, roundRect, shade, withAlpha } from './shapes';
+import {
+  diamondPath,
+  faces,
+  isoBox,
+  isoCylinder,
+  mix,
+  roundRect,
+  shade,
+  withAlpha,
+} from './shapes';
 
 export interface Point {
   x: number;
@@ -251,7 +260,8 @@ export function drawPendantLamp(
   cx: number,
   cy: number,
   time: number,
-  lit: boolean,
+  /** 0 at midday, 1 after dark. Drives how hard the lamp reads as a light source. */
+  glow: number,
 ): void {
   // A slow sway keeps the room from feeling frozen.
   const sway = Math.sin(time * 0.6 + cx * 0.05) * 1.1;
@@ -271,18 +281,19 @@ export function drawPendantLamp(
   ctx.lineTo(x, top);
   ctx.stroke();
 
-  if (lit) {
-    const glow = ctx.createRadialGradient(x, shadeY + 4, 0, x, shadeY + 4, rx * 2.6);
-    glow.addColorStop(0, alpha('#ffd9a0', 0.4));
-    glow.addColorStop(1, alpha('#ffd9a0', 0));
-    ctx.fillStyle = glow;
-    ctx.beginPath();
-    ctx.arc(x, shadeY + 4, rx * 2.6, 0, Math.PI * 2);
-    ctx.fill();
-  }
+  // Halo around the bulb. It grows through the evening, which is what makes the
+  // lamps look like they are doing the work once the daylight has gone.
+  const haloR = rx * (2.2 + glow * 1.5);
+  const halo = ctx.createRadialGradient(x, shadeY + 4, 0, x, shadeY + 4, haloR);
+  halo.addColorStop(0, alpha('#ffd9a0', 0.3 + glow * 0.42));
+  halo.addColorStop(1, alpha('#ffd9a0', 0));
+  ctx.fillStyle = halo;
+  ctx.beginPath();
+  ctx.arc(x, shadeY + 4, haloR, 0, Math.PI * 2);
+  ctx.fill();
 
   // Conical shade: painted outside, warm underside.
-  ctx.fillStyle = lit ? '#c9553f' : '#8d4436';
+  ctx.fillStyle = '#c9553f';
   ctx.beginPath();
   ctx.moveTo(x - rx * 0.28, top);
   ctx.lineTo(x + rx * 0.28, top);
@@ -291,7 +302,7 @@ export function drawPendantLamp(
   ctx.closePath();
   ctx.fill();
 
-  ctx.fillStyle = lit ? '#e2705a' : '#a3564a';
+  ctx.fillStyle = '#e2705a';
   ctx.beginPath();
   ctx.moveTo(x - rx * 0.28, top);
   ctx.lineTo(x, top + 1.6);
@@ -299,15 +310,168 @@ export function drawPendantLamp(
   ctx.closePath();
   ctx.fill();
 
-  ctx.fillStyle = lit ? '#ffe8b8' : '#6f4a3c';
+  ctx.fillStyle = mix('#ffe8b8', '#fffdf2', glow);
   ctx.beginPath();
   ctx.ellipse(x, shadeY, rx, rx * 0.32, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  if (lit) {
-    ctx.fillStyle = '#fff6dd';
+  ctx.fillStyle = '#fff6dd';
+  ctx.beginPath();
+  ctx.ellipse(x, shadeY + 2, rx * (0.3 + glow * 0.14), rx * 0.16, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+/**
+ * Cast-iron street lamp on the pavement. These are what keep the streetscape
+ * from going flat and unreadable once the sun is down.
+ */
+export function drawStreetLamp(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  night: number,
+): void {
+  const h = 36;
+  ctx.fillStyle = alpha('#2a1c14', 0.22);
+  ctx.beginPath();
+  ctx.ellipse(cx + 3, cy + 1, 7, 3.5, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = '#3f4d55';
+  roundRect(ctx, cx - 3.6, cy - 5, 7.2, 5, 2);
+  ctx.fill();
+  ctx.fillStyle = '#55666f';
+  roundRect(ctx, cx - 1.3, cy - h, 2.6, h - 3, 1.3);
+  ctx.fill();
+  ctx.fillStyle = '#6c7f89';
+  ctx.fillRect(cx - 1.3, cy - h, 1, h - 3);
+
+  // Lantern: a warm cage that lights up after dark.
+  const lampY = cy - h - 3;
+  ctx.fillStyle = '#3f4d55';
+  ctx.beginPath();
+  ctx.moveTo(cx - 4.6, lampY + 5.4);
+  ctx.lineTo(cx - 2.6, lampY - 3);
+  ctx.lineTo(cx + 2.6, lampY - 3);
+  ctx.lineTo(cx + 4.6, lampY + 5.4);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = mix('#cfd6d0', '#ffe6a8', night);
+  ctx.beginPath();
+  ctx.moveTo(cx - 3.3, lampY + 4.2);
+  ctx.lineTo(cx - 1.8, lampY - 1.8);
+  ctx.lineTo(cx + 1.8, lampY - 1.8);
+  ctx.lineTo(cx + 3.3, lampY + 4.2);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = '#2f3a41';
+  roundRect(ctx, cx - 3.6, lampY - 5, 7.2, 2.2, 1.1);
+  ctx.fill();
+
+  if (night > 0.02) {
+    const r = 28 + night * 14;
+    const g = ctx.createRadialGradient(cx, lampY + 2, 0, cx, lampY + 2, r);
+    g.addColorStop(0, alpha('#ffd79a', 0.34 * night));
+    g.addColorStop(1, alpha('#ffd79a', 0));
+    ctx.fillStyle = g;
     ctx.beginPath();
-    ctx.ellipse(x, shadeY + 2, rx * 0.34, rx * 0.16, 0, 0, Math.PI * 2);
+    ctx.arc(cx, lampY + 2, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+/** Park bench, seen end-on so it reads at any zoom. */
+export function drawBench(ctx: CanvasRenderingContext2D, cx: number, cy: number): void {
+  ctx.fillStyle = alpha('#2a1c14', 0.2);
+  ctx.beginPath();
+  ctx.ellipse(cx + 2, cy + 1, 17, 6, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#5d6a70';
+  ctx.fillRect(cx - 13, cy - 8, 3, 8);
+  ctx.fillRect(cx + 10, cy - 8, 3, 8);
+  ctx.fillStyle = '#a9713f';
+  roundRect(ctx, cx - 16, cy - 12, 32, 5, 2);
+  ctx.fill();
+  ctx.fillStyle = '#c08a52';
+  roundRect(ctx, cx - 16, cy - 21, 32, 8, 2.5);
+  ctx.fill();
+  ctx.fillStyle = alpha('#7c5330', 0.5);
+  ctx.fillRect(cx - 16, cy - 17, 32, 1.4);
+}
+
+/** A run of clipped hedge, used to edge the little parks. */
+export function drawHedge(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  seed: number,
+): void {
+  const n = tileNoise(seed, seed * 3 + 1);
+  const h = 0.26 + n * 0.06;
+  ctx.fillStyle = alpha('#20301c', 0.18);
+  diamondPath(ctx, cx, cy + 2, 0.92, 0.92);
+  ctx.fill();
+  isoBox(ctx, cx, cy, 0.96, 0.96, h, faces('#508c46'));
+  // A scalloped crown, so a run of hedge does not read as a row of green cubes.
+  for (let i = -1; i <= 1; i++) {
+    ctx.fillStyle = i === 0 ? '#8ec46c' : '#77b25f';
+    ctx.beginPath();
+    ctx.ellipse(
+      cx + i * 13,
+      cy - h * TILE_Z + Math.abs(i) * 3.2,
+      8.5,
+      4.4,
+      0,
+      0,
+      Math.PI * 2,
+    );
+    ctx.fill();
+  }
+}
+
+/** Market stall with a striped canopy, parked on the far pavement. */
+export function drawStall(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  seed: number,
+): void {
+  const stripes = ['#e8695a', '#4f9dd0', '#f0b429'] as const;
+  const stripe = stripes[Math.floor(tileNoise(seed, seed + 5) * stripes.length) % stripes.length]!;
+
+  ctx.fillStyle = alpha('#2a1c14', 0.22);
+  diamondPath(ctx, cx, cy + 2, 1.05, 1.05);
+  ctx.fill();
+
+  isoBox(ctx, cx, cy, 0.9, 0.9, 0.42, faces('#b98d5d'));
+  // Produce in crates on the counter.
+  for (let i = 0; i < 3; i++) {
+    const n = tileNoise(seed + i, seed - i);
+    ctx.fillStyle = ['#d94f3d', '#e8a33c', '#5fa84e'][i]!;
+    ctx.beginPath();
+    ctx.ellipse(cx - 12 + i * 12, cy - 0.46 * TILE_Z - n * 2, 6, 3.4, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  // Canopy on four posts.
+  ctx.fillStyle = '#8a6a45';
+  for (const [ox, oy] of [[-0.42, 0], [0.42, 0], [0, -0.42], [0, 0.42]] as const) {
+    const px = cx + (ox - oy) * TILE_W * 0.5;
+    const py = cy + (ox + oy) * TILE_H * 0.5;
+    ctx.fillRect(px - 1.2, py - 1.15 * TILE_Z, 2.4, 1.15 * TILE_Z);
+  }
+  isoBox(ctx, cx, cy, 1.12, 1.12, 0.08, faces('#fff3dc'), 1.15);
+  ctx.save();
+  diamondPath(ctx, cx, cy - 1.23 * TILE_Z, 1.12, 1.12);
+  ctx.clip();
+  ctx.fillStyle = stripe;
+  for (let i = -4; i <= 4; i++) {
+    ctx.beginPath();
+    ctx.moveTo(cx + i * 10 - 4, cy - 1.5 * TILE_Z);
+    ctx.lineTo(cx + i * 10 + 1, cy - 1.5 * TILE_Z);
+    ctx.lineTo(cx + i * 10 + 21, cy - 0.9 * TILE_Z);
+    ctx.lineTo(cx + i * 10 + 16, cy - 0.9 * TILE_Z);
+    ctx.closePath();
     ctx.fill();
   }
   ctx.restore();
@@ -323,7 +487,10 @@ export function drawPendantLamp(
 export const WORLD = {
   plaza: '#e0cba8',
   plazaJoint: '#bda484',
-  road: '#c9bda8',
+  road: '#8f8b8a',
+  roadJoint: '#7a7675',
+  pave: '#cfc7b8',
+  paveJoint: '#a89e8d',
   grass: '#86b96a',
   grassDark: '#5f9450',
   trunk: '#8a6141',
@@ -345,9 +512,103 @@ export function drawPlazaTile(
   diamondPath(ctx, cx, cy, 1, 1);
   ctx.fillStyle = tone(road ? WORLD.road : WORLD.plaza, 0.93 + n * 0.13);
   ctx.fill();
-  ctx.strokeStyle = alpha(WORLD.plazaJoint, 0.4);
+  ctx.strokeStyle = alpha(road ? WORLD.roadJoint : WORLD.plazaJoint, 0.4);
   ctx.lineWidth = 1;
   ctx.stroke();
+}
+
+export interface RoadTileOptions {
+  /** Paint half of a lane divider along this tile. */
+  dash?: boolean;
+  /** Paint zebra bars across the tile, running along the given grid axis. */
+  crossing?: 'x' | 'y';
+  /** Draw a raised kerb on the far side of the tile along the given axis. */
+  kerb?: Array<'nw' | 'ne' | 'se' | 'sw'>;
+}
+
+/**
+ * Asphalt. The road is the piece that turns a field of tiles into a street, so
+ * it carries its own markings rather than relying on props for legibility.
+ */
+export function drawRoadTile(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  n: number,
+  opts: RoadTileOptions = {},
+): void {
+  diamondPath(ctx, cx, cy, 1, 1);
+  ctx.fillStyle = tone(WORLD.road, 0.95 + n * 0.1);
+  ctx.fill();
+  // Faint aggregate speckle; two dots a tile is enough to kill the flatness.
+  ctx.fillStyle = alpha('#ffffff', 0.05);
+  ctx.beginPath();
+  ctx.arc(cx + (n - 0.5) * 22, cy + (n - 0.5) * 10, 2.4, 0, Math.PI * 2);
+  ctx.arc(cx - (n - 0.5) * 16, cy - (n - 0.5) * 7, 1.6, 0, Math.PI * 2);
+  ctx.fill();
+
+  if (opts.crossing) {
+    ctx.save();
+    diamondPath(ctx, cx, cy, 1, 1);
+    ctx.clip();
+    ctx.fillStyle = alpha('#fdf6e6', 0.82);
+    for (let i = -1; i <= 1; i++) {
+      // Bars run across the road, so they follow the axis traffic crosses.
+      const along = opts.crossing === 'x' ? [TILE_W / 2, TILE_H / 2] : [-TILE_W / 2, TILE_H / 2];
+      const across = opts.crossing === 'x' ? [-TILE_W / 2, TILE_H / 2] : [TILE_W / 2, TILE_H / 2];
+      const ox = cx + (across[0]! * i) / 3;
+      const oy = cy + (across[1]! * i) / 3;
+      ctx.beginPath();
+      ctx.moveTo(ox - along[0]! * 0.5 - across[0]! * 0.11, oy - along[1]! * 0.5 - across[1]! * 0.11);
+      ctx.lineTo(ox + along[0]! * 0.5 - across[0]! * 0.11, oy + along[1]! * 0.5 - across[1]! * 0.11);
+      ctx.lineTo(ox + along[0]! * 0.5 + across[0]! * 0.11, oy + along[1]! * 0.5 + across[1]! * 0.11);
+      ctx.lineTo(ox - along[0]! * 0.5 + across[0]! * 0.11, oy - along[1]! * 0.5 + across[1]! * 0.11);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.restore();
+  } else if (opts.dash) {
+    ctx.fillStyle = alpha('#f4e9c8', 0.5);
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, 9, 4.4, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+/** Pavement slab, a shade warmer and lighter than the road it edges. */
+export function drawPaveTile(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  n: number,
+  /** Kerb faces to drop, as offsets towards the neighbouring road tile. */
+  kerbs: ReadonlyArray<readonly [number, number]> = [],
+): void {
+  diamondPath(ctx, cx, cy, 1, 1);
+  ctx.fillStyle = tone(WORLD.paveJoint, 0.9);
+  ctx.fill();
+  diamondPath(ctx, cx, cy - 2, 0.94, 0.94);
+  ctx.fillStyle = tone(WORLD.pave, 0.95 + n * 0.11);
+  ctx.fill();
+
+  // The kerb is the 2px step down to the asphalt. Small, but it is what makes
+  // the pavement read as a pavement rather than as lighter tarmac.
+  for (const [dx, dy] of kerbs) {
+    const ex = ((dx - dy) * TILE_W) / 2;
+    const ey = ((dx + dy) * TILE_H) / 2;
+    const px = cx + ex / 2;
+    const py = cy + ey / 2 - 2;
+    const ax = -ey / 2;
+    const ay = ex / 2;
+    ctx.fillStyle = tone(WORLD.pave, 0.72);
+    ctx.beginPath();
+    ctx.moveTo(px - ax * 0.5, py - ay * 0.5);
+    ctx.lineTo(px + ax * 0.5, py + ay * 0.5);
+    ctx.lineTo(px + ax * 0.5, py + ay * 0.5 + 3);
+    ctx.lineTo(px - ax * 0.5, py - ay * 0.5 + 3);
+    ctx.closePath();
+    ctx.fill();
+  }
 }
 
 /** A bed of lawn, drawn slightly proud of the paving that surrounds it. */
@@ -364,20 +625,49 @@ export function drawLawnTile(
   ctx.fillStyle = tone(WORLD.grass, 0.94 + n * 0.14);
   ctx.fill();
 
-  // A clump of bedding flowers on some tiles, for colour at ground level.
-  if (n > 0.62) {
+  // Mown banding, which reads as a kept lawn rather than a green diamond.
+  ctx.strokeStyle = alpha('#ffffff', 0.07);
+  ctx.lineWidth = 5;
+  ctx.beginPath();
+  ctx.moveTo(cx - TILE_W * 0.42, cy - TILE_H * 0.04);
+  ctx.lineTo(cx + TILE_W * 0.06, cy + TILE_H * 0.2);
+  ctx.stroke();
+
+  // An occasional bed of flowers, kept as one tight clump rather than scattered
+  // across the tile, which just read as confetti dropped on the grass.
+  if (n > 0.84) {
     const petals = ['#f2617a', '#f7c548', '#f28e5a', '#d986d4'] as const;
     const petal = petals[Math.floor(n * 997) % petals.length]!;
-    for (let i = 0; i < 5; i++) {
-      const a = n * 41 + i * 1.7;
-      const px = cx + Math.cos(a) * 13;
-      const py = cy - TILE_Z * 0.05 + Math.sin(a) * 6;
+    const bx = cx + (n - 0.9) * 40;
+    const by = cy - TILE_Z * 0.05 + (n - 0.88) * 20;
+    ctx.fillStyle = alpha('#3f6b36', 0.5);
+    ctx.beginPath();
+    ctx.ellipse(bx, by, 9, 4.5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    for (let i = 0; i < 6; i++) {
+      const a = n * 41 + i * 1.05;
       ctx.fillStyle = i % 2 === 0 ? petal : '#fff3d4';
       ctx.beginPath();
-      ctx.arc(px, py, 1.9, 0, Math.PI * 2);
+      ctx.arc(bx + Math.cos(a) * 5.5, by + Math.sin(a) * 2.8, 1.9, 0, Math.PI * 2);
       ctx.fill();
     }
   }
+}
+
+/** Gravel path through a park, laid over the lawn. */
+export function drawPathTile(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  n: number,
+): void {
+  diamondPath(ctx, cx, cy - TILE_Z * 0.05, 0.98, 0.98);
+  ctx.fillStyle = tone('#d8c49c', 0.94 + n * 0.12);
+  ctx.fill();
+  ctx.fillStyle = alpha('#8f7a56', 0.28);
+  ctx.beginPath();
+  ctx.arc(cx + (n - 0.5) * 18, cy + (n - 0.5) * 8, 1.8, 0, Math.PI * 2);
+  ctx.fill();
 }
 
 /** Street tree: trunk plus three overlapping crowns that drift in the breeze. */
@@ -432,8 +722,33 @@ export function drawTree(
 }
 
 /**
- * A neighbouring shopfront. These fill the streetscape around the restaurant so
- * the player is looking at a town rather than at empty ground.
+ * Set up a drawing plane on one of a box's two camera-facing walls, so a facade
+ * can be laid out as if on flat paper: local x runs along the wall from the near
+ * corner, local y runs down the screen. Returns the wall's width in local units.
+ * The caller owns the surrounding save/restore.
+ */
+function facadePlane(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  span: number,
+  side: 'left' | 'right',
+): number {
+  // Both visible walls meet at the near (south) corner of the footprint.
+  const nearY = cy + (TILE_H / 2) * span;
+  const dir = side === 'right' ? 1 : -1;
+  ctx.transform(dir, -0.5, 0, 1, cx, nearY);
+  return (TILE_W / 2) * span;
+}
+
+const SHOP_WALLS = ['#e8a9a2', '#9fc4de', '#f0cf95', '#aed49b', '#c9aede', '#efb27f'] as const;
+const AWNINGS = ['#c9503f', '#2f7f9e', '#e0952c', '#4b8d55', '#8a5aa8'] as const;
+
+/**
+ * A neighbouring shopfront: glazed ground floor under a striped awning, windows
+ * upstairs that light up after dark, and something on the roof. These fill the
+ * streetscape around the restaurant, so they have to read as buildings at a
+ * glance from a long way off.
  */
 export function drawShopBlock(
   ctx: CanvasRenderingContext2D,
@@ -442,40 +757,93 @@ export function drawShopBlock(
   span: number,
   height: number,
   seed: number,
+  night = 0,
 ): void {
-  const walls = ['#e8a9a2', '#9fc4de', '#f0cf95', '#aed49b', '#c9aede', '#efb27f'] as const;
-  const wall = walls[Math.floor(tileNoise(seed, seed + 3) * walls.length) % walls.length]!;
+  const n = tileNoise(seed, seed + 3);
+  const wall = SHOP_WALLS[Math.floor(n * SHOP_WALLS.length) % SHOP_WALLS.length]!;
+  const awning = AWNINGS[Math.floor(tileNoise(seed + 7, seed) * AWNINGS.length) % AWNINGS.length]!;
+  const shopH = 0.62;
+  const canopyH = shopH + 0.06;
 
-  ctx.fillStyle = 'rgba(40, 28, 22, 0.18)';
+  ctx.fillStyle = alpha('#281c16', 0.2);
   ctx.beginPath();
-  ctx.ellipse(cx + 4, cy + 3, TILE_W * span * 0.32, TILE_H * span * 0.32, 0, 0, Math.PI * 2);
+  ctx.ellipse(cx + 6, cy + 4, TILE_W * span * 0.34, TILE_H * span * 0.34, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  // Upper storeys.
+  // Upper storeys, then the glazed ground floor set into them.
   isoBox(ctx, cx, cy, span, span, height, faces(wall));
-  // A shorter box of glazing over the same footprint covers the lower part of the
-  // faces, and its top doubles as the canopy above the shopfront.
-  isoBox(ctx, cx, cy, span, span, 0.55, faces('#6d8496'));
-  isoBox(ctx, cx, cy, span * 1.1, span * 1.1, 0.1, faces(shade(wall, 0.82)), 0.55);
-  // Parapet.
-  isoBox(ctx, cx, cy, span * 1.08, span * 1.08, 0.13, faces(shade(wall, 0.8)), height);
-}
+  isoBox(ctx, cx, cy, span, span, shopH, faces('#54646f'));
 
-const PAVING = '#8e8a80';
+  for (const side of ['left', 'right'] as const) {
+    ctx.save();
+    const w = facadePlane(ctx, cx, cy, span, side);
+    const lit = side === 'right' ? 1 : 0.84;
 
-/** Paving slab with a joint around it, matching the floor tile treatment. */
-export function drawPavingTile(
-  ctx: CanvasRenderingContext2D,
-  cx: number,
-  cy: number,
-  n: number,
-): void {
-  diamondPath(ctx, cx, cy, 1, 1);
-  ctx.fillStyle = tone(PAVING, 0.7);
+    // Shopfront: a door and a wide pane, with warm light spilling out at night.
+    const glass = mix(shade('#9fb6c2', lit), '#ffd89a', night * 0.85);
+    ctx.fillStyle = glass;
+    ctx.fillRect(w * 0.08, -shopH * TILE_Z + 3, w * 0.5, shopH * TILE_Z - 6);
+    ctx.fillStyle = shade('#6f4a33', lit);
+    ctx.fillRect(w * 0.66, -shopH * TILE_Z + 3, w * 0.2, shopH * TILE_Z - 3);
+    ctx.fillStyle = alpha('#ffffff', 0.16);
+    ctx.fillRect(w * 0.08, -shopH * TILE_Z + 3, w * 0.5, 3);
+
+    // Striped valance hanging off the canopy above the shopfront.
+    const vy = -canopyH * TILE_Z;
+    const bands = Math.max(3, Math.round(w / 11));
+    for (let i = 0; i < bands; i++) {
+      ctx.fillStyle = i % 2 === 0 ? shade(awning, lit) : shade('#fff2dc', lit);
+      ctx.fillRect(w * 0.02 + (i * w * 0.96) / bands, vy, (w * 0.96) / bands + 0.6, 9);
+    }
+    ctx.fillStyle = alpha('#2b1c14', 0.18);
+    ctx.fillRect(w * 0.02, vy + 7.4, w * 0.96, 1.8);
+
+    // Upper windows, in rows that stop below the parapet.
+    const rows = Math.max(1, Math.floor((height - shopH) / 0.62));
+    const cols = Math.max(2, Math.round(w / 17));
+    for (let r = 0; r < rows; r++) {
+      const wy = -(shopH + 0.36 + r * 0.62) * TILE_Z;
+      for (let c = 0; c < cols; c++) {
+        const wx = w * 0.1 + (c * w * 0.8) / cols;
+        const on = tileNoise(seed + r * 13 + c * 5, seed + c) < 0.55 ? night : night * 0.12;
+        ctx.fillStyle = shade(wall, lit * 0.72);
+        roundRect(ctx, wx - 1, wy - 1, (w * 0.8) / cols - 3, 15, 2);
+        ctx.fill();
+        ctx.fillStyle = mix(shade('#8fa9bb', lit), '#ffdf9e', on);
+        roundRect(ctx, wx, wy, (w * 0.8) / cols - 5, 13, 1.5);
+        ctx.fill();
+      }
+    }
+    ctx.restore();
+  }
+
+  // Canopy plate over the shopfront, and a parapet capping the roof.
+  isoBox(ctx, cx, cy, span * 1.09, span * 1.09, 0.06, faces(shade(wall, 0.88)), canopyH);
+  isoBox(ctx, cx, cy, span * 1.06, span * 1.06, 0.16, faces(shade(wall, 0.82)), height);
+  // A roof deck inside the parapet. Without its own colour the top face is just a
+  // pale slab of wall, and from this camera angle that is most of the building.
+  diamondPath(ctx, cx, cy - (height + 0.16) * TILE_Z, span * 0.94, span * 0.94);
+  ctx.fillStyle = tone('#9b9587', 1);
   ctx.fill();
-  diamondPath(ctx, cx, cy, 0.93, 0.93);
-  ctx.fillStyle = tone(PAVING, 0.94 + n * 0.12);
-  ctx.fill();
+  ctx.strokeStyle = alpha('#6f6a5e', 0.4);
+  ctx.lineWidth = 1;
+  for (let i = -2; i <= 2; i++) {
+    const off = i * span * 6;
+    ctx.beginPath();
+    ctx.moveTo(cx - TILE_W * span * 0.46, cy - (height + 0.16) * TILE_Z + off);
+    ctx.lineTo(cx + TILE_W * span * 0.46, cy - (height + 0.16) * TILE_Z + off + TILE_H * span * 0.46);
+    ctx.stroke();
+  }
+
+  // Roof clutter: a tank, a vent or a stair head, so the skyline is not a plateau.
+  const roll = tileNoise(seed + 21, seed - 4);
+  if (roll < 0.4) {
+    isoBox(ctx, cx - 10, cy + 4, span * 0.3, span * 0.3, 0.4, faces('#a8b0b4'), height + 0.14);
+  } else if (roll < 0.72) {
+    isoCylinder(ctx, cx + 8, cy - 2, span * 0.24, 0.44, '#c2b39a', height + 0.14);
+  } else {
+    isoBox(ctx, cx + 4, cy + 6, span * 0.24, span * 0.5, 0.26, faces(shade(wall, 0.94)), height + 0.14);
+  }
 }
 
 /** Planter box with shrubbery, used to dress the frontage. */

@@ -1,3 +1,4 @@
+import { Fx } from '../engine/fx';
 import { Rng } from '../engine/rng';
 import { clamp } from '../engine/iso';
 import { DISHES_BY_ID, dishLevelFromServings, MAX_DISH_LEVEL } from './data/dishes';
@@ -124,6 +125,8 @@ export class Game {
   customers: Customer[] = [];
   orders: Order[] = [];
   floaters: FloatingText[] = [];
+  /** Purely decorative particles and flashes. Never saved. */
+  readonly fx = new Fx();
 
   /** Incrementing ids, seeded past anything already in the save. */
   private uidSeq = 1;

@@ -17,6 +17,7 @@ export type PlateStyle =
   | 'burger'
   | 'bowl'
   | 'plate'
+  | 'salad'
   | 'skewer'
   | 'slice'
   | 'cake'
@@ -46,7 +47,7 @@ export interface Dish {
 export const DISHES: readonly Dish[] = [
   // ---- Early game ----
   { id: 'house_burger', name: 'House Burger', category: 'main', recipe: { bread: 1, beef: 1, lettuce: 1 }, basePrice: 34, cookTime: 9, unlockLevel: 1, appeal: 0.55, plate: 'burger', color: '#c8712f', accent: '#8a4a1c' },
-  { id: 'garden_salad', name: 'Garden Salad', category: 'starter', recipe: { lettuce: 2, tomato: 1 }, basePrice: 20, cookTime: 6, unlockLevel: 1, appeal: 0.4, plate: 'plate', color: '#8fc46b', accent: '#5d8f44' },
+  { id: 'garden_salad', name: 'Garden Salad', category: 'starter', recipe: { lettuce: 2, tomato: 1 }, basePrice: 20, cookTime: 6, unlockLevel: 1, appeal: 0.4, plate: 'salad', color: '#8fc46b', accent: '#5d8f44' },
   { id: 'crispy_fries', name: 'Crispy Fries', category: 'starter', recipe: { potato: 2, butter: 1 }, basePrice: 22, cookTime: 7, unlockLevel: 1, appeal: 0.5, plate: 'fries', color: '#efc35c', accent: '#bd8f2b' },
   { id: 'tomato_soup', name: 'Tomato Soup', category: 'starter', recipe: { tomato: 2, milk: 1 }, basePrice: 24, cookTime: 8, unlockLevel: 2, appeal: 0.45, plate: 'bowl', color: '#d9503a', accent: '#95301f' },
   { id: 'cheese_omelette', name: 'Cheese Omelette', category: 'main', recipe: { egg: 2, cheese: 1, butter: 1 }, basePrice: 32, cookTime: 9, unlockLevel: 2, appeal: 0.5, plate: 'plate', color: '#f4d06a', accent: '#c39c2e' },
