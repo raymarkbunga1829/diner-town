@@ -13,6 +13,7 @@ import {
   nextVisitDelay,
   refreshFavourite,
   regularLook,
+  regularUnlocked,
   shortName,
 } from './regulars';
 import { RESTOCK_INTERVAL, type Game } from './state';
@@ -234,12 +235,18 @@ export class Simulation {
   /** The regular who is furthest overdue and not already in the room. */
   private dueRegular(): RegularState | null {
     const clock = this.game.data.clock;
+    const level = this.game.data.level;
+    const stars = this.game.stars;
     const inside = new Set(
       this.game.customers.map((c) => c.regularId).filter((id): id is string => id !== null),
     );
     let best: RegularState | null = null;
     for (const r of this.game.data.regulars) {
-      if (r.nextVisitAt > clock || inside.has(r.id) || !REGULARS_BY_ID[r.id]) continue;
+      const def = REGULARS_BY_ID[r.id];
+      if (!def || r.nextVisitAt > clock || inside.has(r.id)) continue;
+      // A face the diner has not earned yet keeps its place in the save and its
+      // booking, but nobody sees them until the food they came for exists.
+      if (!regularUnlocked(def, level, stars)) continue;
       if (!best || r.nextVisitAt < best.nextVisitAt) best = r;
     }
     return best;
@@ -1330,6 +1337,7 @@ export class Simulation {
       covers: d.stats.customersServed,
       walkouts: d.stats.customersLost,
       xp: d.xp,
+      fame: d.fame,
       stock: this.pantryWorth(),
       day: this.game.dayNumber,
     };
@@ -1372,6 +1380,7 @@ export class Simulation {
       ingredients: Math.max(0, before.stock - this.pantryWorth()),
       coins: d.coins - before.coins,
       xp: d.xp - before.xp,
+      fame: d.fame - before.fame,
       daysRolled: this.game.dayNumber - before.day,
       pantryRanDry,
     };
@@ -1421,6 +1430,8 @@ export interface TimeAwayReport {
   /** What the till is actually up, which is takings less wages. */
   coins: number;
   xp: number;
+  /** Fame banked, which is only ever more than nothing at the level cap. */
+  fame: number;
   daysRolled: number;
   /** Set when the kitchen ran out of stock and the team locked up early. */
   pantryRanDry: boolean;

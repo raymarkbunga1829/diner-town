@@ -11,10 +11,15 @@ import { createRegulars, migrateRegulars } from './regulars';
 import {
   DAY_LENGTH,
   dayNumber,
+  isUnlocked,
   levelForXp,
+  MAX_LEVEL,
   MIN_GRID,
   menuCapacity,
   staffCapacity,
+  starsForFame,
+  xpForLevel,
+  type Unlockable,
 } from './progression';
 import type {
   Applicant,
@@ -34,8 +39,11 @@ export const SAVE_KEY = 'diner-town/save/v1';
  * which is what exported text is for.
  */
 export const BACKUP_KEY = 'diner-town/save/backup/v1';
-/** 2 added the regulars roster; `migrate` fills it in for anything older. */
-export const SAVE_VERSION = 2;
+/**
+ * 2 added the regulars roster, 3 the fame earned past the level cap; `migrate`
+ * fills either in for anything older.
+ */
+export const SAVE_VERSION = 3;
 
 /** Market restocks on this cadence (in-game seconds). */
 export const RESTOCK_INTERVAL = 90;
@@ -111,6 +119,7 @@ export function createNewGame(restaurantName = 'Diner Town'): SaveData {
     coins: 1200,
     xp: 0,
     level: 1,
+    fame: 0,
     gridSize: MIN_GRID,
     doorX: Math.floor(MIN_GRID / 2),
     open: true,
@@ -157,6 +166,8 @@ export class Game {
 
   /** Set when the level changes so the UI can show a celebration. */
   pendingLevelUp: number | null = null;
+  /** Set when a fame star is earned, which only happens at the level cap. */
+  pendingStarUp: number | null = null;
   /** Set when a day rolls over so the UI can show that day's card. */
   pendingDayRecap: DayRecap | null = null;
   /** Bumped whenever persistent state changes, so panels can re-render lazily. */
@@ -221,11 +232,44 @@ export class Game {
 
   addXp(amount: number, at?: { tx: number; ty: number }): void {
     const before = this.data.level;
+    const wasXp = this.data.xp;
     this.data.xp += amount;
     this.data.level = levelForXp(this.data.xp);
     if (at) this.addFloater(`+${amount} xp`, at.tx, at.ty, 'xp');
     if (this.data.level > before) this.pendingLevelUp = this.data.level;
+    // Experience the level track has no use for becomes fame. Only the part
+    // past the cap counts, so the shift that reaches level 20 is not paid twice.
+    const capped = Math.max(xpForLevel(MAX_LEVEL), wasXp);
+    if (this.data.xp > capped) this.addFame(this.data.xp - capped);
     this.touch();
+  }
+
+  /**
+   * Bank fame and hand out a star if that crossed one. Kept separate from
+   * `addXp` so anything else worth fame — a recap bonus, say — has a door in.
+   */
+  addFame(amount: number): void {
+    if (!(amount > 0)) return;
+    const before = this.stars;
+    this.data.fame += amount;
+    this.data.today.fame += amount;
+    if (this.stars > before) this.pendingStarUp = this.stars;
+    this.touch();
+  }
+
+  /** Fame stars earned so far. Derived, so it cannot drift from the save. */
+  get stars(): number {
+    return starsForFame(this.data.fame);
+  }
+
+  /** True once the level track has nothing left to give and fame takes over. */
+  get atLevelCap(): boolean {
+    return this.data.level >= MAX_LEVEL;
+  }
+
+  /** Whether the room, the shop and the menu should be offering this yet. */
+  unlocked(item: Unlockable): boolean {
+    return isUnlocked(item, this.data.level, this.stars);
   }
 
   addFloater(
@@ -321,7 +365,7 @@ export class Game {
   // ------------------------------------------------------------------- menu
 
   get menuCapacity(): number {
-    return menuCapacity(this.data.level);
+    return menuCapacity(this.data.level, this.stars);
   }
 
   isOnMenu(dishId: string): boolean {
@@ -359,7 +403,7 @@ export class Game {
   // ------------------------------------------------------------------ staff
 
   get staffCapacity(): number {
-    return staffCapacity(this.data.level);
+    return staffCapacity(this.data.level, this.stars);
   }
 
   staffByRole(role: Staff['role']): Staff[] {
@@ -560,6 +604,12 @@ function migrate(data: SaveData): SaveData {
   const merged: SaveData = { ...fresh, ...data };
   merged.settings = { ...fresh.settings, ...(data.settings ?? {}) };
   merged.stats = { ...fresh.stats, ...(data.stats ?? {}) };
+  // Saves written before the fame track have none, and a hand-edited one can
+  // carry anything at all. Stars are read back out of this number, so a value
+  // that is not a positive number has to become zero rather than NaN. A diner
+  // that ground away at the cap before fame existed starts from zero too, rather
+  // than being handed a fistful of stars it never watched itself earn.
+  merged.fame = Number.isFinite(data.fame) ? Math.max(0, Number(data.fame)) : 0;
   // The clock is what says which day it is, so a ledger from any other day is
   // stale and starts again rather than being credited to today.
   merged.today = normaliseLedger(data.today, dayNumber(merged.clock ?? 0));

@@ -26,6 +26,14 @@ export interface RegularDef {
   cadenceDays: number;
   /** One line of who they are, shown in Manage. */
   note: string;
+  /**
+   * Restaurant level before they start dropping in. Absent means from the very
+   * first day, which is where the whole original roster sits — the late faces
+   * arrive with the food they came for rather than crowding the first hour.
+   */
+  unlockLevel?: number;
+  /** Fame stars needed as well, for the face that only fame brings in. */
+  unlockStars?: number;
 }
 
 export const REGULARS: readonly RegularDef[] = [
@@ -92,6 +100,39 @@ export const REGULARS: readonly RegularDef[] = [
     tastes: ['fish_and_chips', 'salmon_sushi', 'crispy_fries'],
     cadenceDays: 3,
     note: 'Off the harbour boats. Judges any kitchen by how it treats fish.',
+  },
+
+  // ---- The late roster ----
+  // Every one of these hopes for something off the top of the menu, but keeps a
+  // dish from further down their list, so they can still be fed on a night the
+  // pantry or the menu is not up to it.
+  {
+    id: 'sabine',
+    name: 'Sabine Corrigan',
+    look: { hair: '#2f2a26', hairStyle: 'long', shirt: '#2f7f6b', pants: '#3a3f4a' },
+    tastes: ['harbour_pie', 'harvest_hotpot', 'fish_and_chips'],
+    cadenceDays: 3,
+    note: 'Ran the chip shop on the corner for thirty years. Came to see how you do it.',
+    unlockLevel: 17,
+  },
+  {
+    id: 'ivo',
+    name: 'Ivo Petrakis',
+    look: { hair: '#6b6259', hairStyle: 'bald', shirt: '#c05a3a', pants: '#33455c' },
+    tastes: ['mocha_torte', 'feast_board', 'choc_cake'],
+    cadenceDays: 4,
+    note: 'Closes the bakery early on the nights he thinks pudding is worth the walk.',
+    unlockLevel: 19,
+  },
+  {
+    id: 'nadia',
+    name: 'Nadia Oyelaran',
+    look: { hair: '#1f1b18', hairStyle: 'curly', shirt: '#e0b23c', pants: '#4a2f52' },
+    tastes: ['kitchen_table', 'feast_board', 'house_burger'],
+    cadenceDays: 3,
+    note: 'Writes up the places people queue for. Turned up once your name got out.',
+    unlockLevel: 20,
+    unlockStars: 4,
   },
 ];
 

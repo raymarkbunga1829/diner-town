@@ -37,6 +37,11 @@ export interface Dish {
   cookTime: number;
   /** Restaurant level at which the recipe becomes available. */
   unlockLevel: number;
+  /**
+   * Fame stars needed on top of the level, for recipes that only arrive after
+   * the restaurant level has capped out. Absent on everything else.
+   */
+  unlockStars?: number;
   /** Drives how appealing the dish is to customers (0..1). */
   appeal: number;
   plate: PlateStyle;
@@ -71,6 +76,22 @@ export const DISHES: readonly Dish[] = [
   { id: 'prime_steak', name: 'Prime Rib Steak', category: 'main', recipe: { beef: 3, butter: 1, mushroom: 1, spice: 1 }, basePrice: 98, cookTime: 20, unlockLevel: 12, appeal: 0.86, plate: 'plate', color: '#8e4130', accent: '#5a2418' },
   { id: 'lobster_bisque', name: 'Seafood Bisque', category: 'starter', recipe: { shrimp: 2, milk: 2, butter: 1, spice: 1 }, basePrice: 88, cookTime: 18, unlockLevel: 14, appeal: 0.84, plate: 'bowl', color: '#e6875a', accent: '#a5502a' },
   { id: 'grand_dessert', name: 'Grand Dessert Tower', category: 'dessert', recipe: { chocolate: 2, berries: 2, sugar: 2, milk: 1, flour: 1 }, basePrice: 110, cookTime: 22, unlockLevel: 16, appeal: 0.9, plate: 'cake', color: '#b4577f', accent: '#6f2c4b' },
+
+  // ---- Level 17-20 ----
+  // The long end of the menu. These are deliberately slow and stocked out of the
+  // dearest shelves in the market, so a late kitchen earns a little more per
+  // second than a mid one without turning into a coin fountain.
+  { id: 'harbour_pie', name: 'Harbour Fish Pie', category: 'main', recipe: { fish: 2, potato: 3, milk: 1, butter: 1, cheese: 1 }, basePrice: 118, cookTime: 23, unlockLevel: 17, appeal: 0.87, plate: 'plate', color: '#e7d2a4', accent: '#a2763c' },
+  { id: 'harvest_hotpot', name: 'Harvest Hotpot', category: 'main', recipe: { pork: 2, mushroom: 2, onion: 2, noodles: 2, spice: 1 }, basePrice: 128, cookTime: 24, unlockLevel: 18, appeal: 0.88, plate: 'bowl', color: '#c46a3c', accent: '#7c3a1c' },
+  { id: 'mocha_torte', name: 'Midnight Mocha Torte', category: 'dessert', recipe: { chocolate: 3, coffee: 2, sugar: 2, egg: 1, butter: 1 }, basePrice: 136, cookTime: 25, unlockLevel: 19, appeal: 0.9, plate: 'cake', color: '#4b2e20', accent: '#caa062' },
+  { id: 'feast_board', name: 'House Feast Board', category: 'main', recipe: { beef: 2, shrimp: 2, chicken: 2, bread: 2, spice: 2 }, basePrice: 162, cookTime: 28, unlockLevel: 20, appeal: 0.93, plate: 'plate', color: '#c98b4a', accent: '#7a4620' },
+
+  // ---- Fame stars ----
+  // Past the level cap there is nowhere left to climb, so the last recipe is
+  // bought with fame instead.
+  // Level 20 here is the level cap; `progression` owns that number and the
+  // checks hold these two together.
+  { id: 'kitchen_table', name: 'Kitchen Table Supper', category: 'main', recipe: { beef: 2, mushroom: 2, potato: 2, butter: 2, spice: 1 }, basePrice: 160, cookTime: 30, unlockLevel: 20, unlockStars: 1, appeal: 0.95, plate: 'plate', color: '#a5522f', accent: '#632c17' },
 ];
 
 export const DISHES_BY_ID: Record<string, Dish> = Object.fromEntries(

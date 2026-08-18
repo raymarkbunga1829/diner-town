@@ -7,7 +7,7 @@ import { clamp, tileToWorld, type Point } from './engine/iso';
 import { FURNITURE_BY_ID, isWallMounted, resaleValue } from './game/data/furniture';
 import { footprint } from './game/grid';
 import { nearestActor } from './game/pick';
-import { unlocksAtLevel } from './game/progression';
+import { STAR_REWARDS, unlocksAtLevel, unlocksAtStar, type Unlocks } from './game/progression';
 import {
   catchUpWhileAway,
   Simulation,
@@ -206,6 +206,7 @@ class App implements AppApi {
     this.recapHold = Math.max(0, this.recapHold - dt);
     this.checkTimeAway(dt);
     this.checkLevelUp();
+    this.checkStarUp();
     this.checkDayRecap();
     this.checkCoach();
     this.checkPantryCrisis();
@@ -248,6 +249,7 @@ class App implements AppApi {
       value: `${report.coins < 0 ? '-' : '+'}${fmt(Math.abs(report.coins))}`,
     });
     if (report.xp > 0) lines.push({ label: 'Experience', value: fmt(report.xp) });
+    if (report.fame > 0) lines.push({ label: 'Fame', value: fmt(report.fame) });
 
     // What the card is for is the difference between the takings and what they
     // cost, because that is the part the old bonus quietly left out.
@@ -281,12 +283,7 @@ class App implements AppApi {
     const size = this.game.data.gridSize;
     this.game.fx.levelUp(size / 2, size / 2);
 
-    const unlocks = unlocksAtLevel(level);
-    const lines: Array<{ label: string; value: string }> = [];
-    if (unlocks.dishes.length) lines.push({ label: 'New recipes', value: unlocks.dishes.join(', ') });
-    if (unlocks.furniture.length) {
-      lines.push({ label: 'New in the shop', value: unlocks.furniture.join(', ') });
-    }
+    const lines = unlockLines(unlocksAtLevel(level));
     lines.push({ label: 'Menu slots', value: String(this.game.menuCapacity) });
     lines.push({ label: 'Staff positions', value: String(this.game.staffCapacity) });
 
@@ -307,6 +304,40 @@ class App implements AppApi {
     this.save();
   }
 
+  /**
+   * The same moment for the fame track. A star is the level-up of a diner that
+   * has run out of levels, so it gets the same confetti and the same card, and
+   * it names what the star just opened up rather than only counting itself.
+   */
+  private checkStarUp(): void {
+    const star = this.game.pendingStarUp;
+    if (star === null) return;
+    if (this.awayReport || this.game.pendingLevelUp !== null || this.ui.hasModal) return;
+    this.game.pendingStarUp = null;
+    audio.play('levelup');
+    const size = this.game.data.gridSize;
+    this.game.fx.levelUp(size / 2, size / 2);
+
+    const lines = unlockLines(unlocksAtStar(star));
+    const reward = STAR_REWARDS.find((r) => r.star === star);
+    if (reward?.menuSlots) lines.push({ label: 'Menu slots', value: String(this.game.menuCapacity) });
+    if (reward?.staffSlots) {
+      lines.push({ label: 'Staff positions', value: String(this.game.staffCapacity) });
+    }
+    lines.push({ label: 'Fame stars', value: String(star) });
+
+    this.recapHold = 1.4;
+    window.setTimeout(() => {
+      this.ui.showInfoModal(
+        reward ? `${reward.title}!` : `Fame star ${star}!`,
+        lines,
+        reward?.note ?? 'People are coming across town for this place now.',
+        'Back to work',
+      );
+    }, 750);
+    this.save();
+  }
+
   /** Seconds to sit on a queued recap, so a level-up card gets the room first. */
   private recapHold = 0;
 
@@ -319,7 +350,8 @@ class App implements AppApi {
     if (!recap) return;
     // Something is already covering the room, or is about to: hold the recap
     // rather than stacking a second card on top of it.
-    if (this.recapHold > 0 || this.game.pendingLevelUp !== null || this.ui.hasModal) return;
+    if (this.recapHold > 0 || this.ui.hasModal) return;
+    if (this.game.pendingLevelUp !== null || this.game.pendingStarUp !== null) return;
     if (this.awayReport !== null) return;
     this.game.pendingDayRecap = null;
     audio.play('bell');
@@ -967,6 +999,19 @@ class App implements AppApi {
   }
 
   private saveRefused = false;
+}
+
+/** Name what a level or a star just opened up, skipping whatever it did not. */
+function unlockLines(unlocks: Unlocks): Array<{ label: string; value: string }> {
+  const lines: Array<{ label: string; value: string }> = [];
+  if (unlocks.dishes.length) lines.push({ label: 'New recipes', value: unlocks.dishes.join(', ') });
+  if (unlocks.furniture.length) {
+    lines.push({ label: 'New in the shop', value: unlocks.furniture.join(', ') });
+  }
+  if (unlocks.regulars.length) {
+    lines.push({ label: 'New regular', value: unlocks.regulars.join(', ') });
+  }
+  return lines;
 }
 
 /** Whether this guest has a bubble or a name plate floating over them. */

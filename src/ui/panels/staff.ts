@@ -200,7 +200,9 @@ function renderHiring(app: AppApi, body: HTMLElement): void {
       el('div', {
         class: 'desc',
         text: full
-          ? `You have filled all ${app.game.staffCapacity} positions. Reach a higher level to unlock more.`
+          ? `You have filled all ${app.game.staffCapacity} positions. ${
+              app.game.atLevelCap ? 'Fame stars open more.' : 'Reach a higher level to unlock more.'
+            }`
           : 'Pay a one-off hiring fee, then a daily wage. Higher skill means faster work.',
       }),
     ]),

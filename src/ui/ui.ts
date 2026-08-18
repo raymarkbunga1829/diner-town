@@ -1,5 +1,5 @@
 import { audio } from '../engine/audio';
-import { clockLabel, levelProgress, MAX_LEVEL } from '../game/progression';
+import { clockLabel, fameProgress, levelProgress, MAX_LEVEL } from '../game/progression';
 import type { Game } from '../game/state';
 import type { DayRecap, RecapAction } from '../game/types';
 import type {
@@ -39,6 +39,7 @@ export class UI {
   private topbar!: HTMLElement;
   private coinsEl!: HTMLElement;
   private levelEl!: HTMLElement;
+  private fameEl!: HTMLElement;
   private ratingEl!: HTMLElement;
   private clockEl!: HTMLElement;
   private dock!: HTMLElement;
@@ -60,6 +61,7 @@ export class UI {
     coins: -1,
     level: -1,
     xp: -1,
+    fame: -1,
     rating: -1,
     clock: '',
     open: true,
@@ -87,6 +89,13 @@ export class UI {
 
     this.coinsEl = el('div', { class: 'pill coins' });
     this.levelEl = el('div', { class: 'pill level-pill' });
+    // Hidden until the level track runs out, so a new diner is never shown an
+    // endgame goal it cannot work towards.
+    this.fameEl = el('div', {
+      class: 'pill level-pill tappable',
+      style: 'display:none',
+      onclick: () => this.app.openSheet('manage'),
+    });
     this.ratingEl = el('div', { class: 'pill tappable' });
     this.clockEl = el('div', { class: 'pill' });
 
@@ -104,6 +113,7 @@ export class UI {
       ]),
       this.coinsEl,
       this.levelEl,
+      this.fameEl,
       this.ratingEl,
       this.clockEl,
       el('div', { class: 'spacer' }),
@@ -186,6 +196,29 @@ export class UI {
         ]),
         el('div', { class: 'bar' }, [levelBar]),
       );
+    }
+
+    // Fame only exists past the cap, so the pill only exists there too.
+    const showFame = prog.level >= MAX_LEVEL || d.fame > 0;
+    if (this.cache.fame !== (showFame ? d.fame : -1)) {
+      this.cache.fame = showFame ? d.fame : -1;
+      this.fameEl.style.display = showFame ? '' : 'none';
+      if (showFame) {
+        const fame = fameProgress(d.fame);
+        clear(this.fameEl);
+        this.fameEl.append(
+          el('div', { class: 'level-row' }, [
+            el('span', {
+              style: 'display:inline-flex;align-items:center;gap:4px',
+              html: `${iconSvg('star', 13, '#e89a12')}<span>Fame ${fame.star}</span>`,
+            }),
+            el('span', { class: 'dim', text: `${Math.floor(fame.into)}/${fame.span}` }),
+          ]),
+          el('div', { class: 'bar' }, [
+            el('i', { style: `width:${((fame.into / fame.span) * 100).toFixed(1)}%` }),
+          ]),
+        );
+      }
     }
 
     const rating = Math.round(this.game.rating * 20) / 20;
@@ -576,6 +609,16 @@ export class UI {
       value: `${takings - recap.wagesPaid >= 0 ? '+' : ''}${fmt(takings - recap.wagesPaid)}`,
       warn: takings - recap.wagesPaid < 0,
     });
+    // Only ever non-zero at the level cap, so a first-week card looks the same
+    // as it always did.
+    if (recap.fame > 0 || this.game.data.fame > 0) {
+      const fame = fameProgress(this.game.data.fame);
+      if (recap.fame > 0) rows.push({ label: 'Fame earned', value: `+${fmt(recap.fame)}` });
+      rows.push({
+        label: 'Fame stars',
+        value: `${fame.star} · ${Math.floor(fame.into)}/${fame.span} to the next`,
+      });
+    }
 
     this.showModal((close) =>
       el('div', { class: 'modal' }, [

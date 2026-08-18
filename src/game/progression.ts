@@ -1,8 +1,28 @@
 import { DISHES } from './data/dishes';
 import { FURNITURE } from './data/furniture';
+import { REGULARS } from './data/regulars';
 
-/** Restaurant level caps out here; content unlocks stop after this. */
+/** Restaurant level caps out here; the fame stars below carry on from it. */
 export const MAX_LEVEL = 20;
+
+/**
+ * Anything the catalogue gates behind progress. `unlockStars` is only set on the
+ * handful of things that arrive after the restaurant level has capped out, so
+ * everything a player meets on the way up reads exactly as it did before.
+ */
+export interface Unlockable {
+  unlockLevel: number;
+  unlockStars?: number;
+}
+
+export function isUnlocked(item: Unlockable, level: number, stars: number): boolean {
+  return level >= item.unlockLevel && stars >= (item.unlockStars ?? 0);
+}
+
+/** What the shop and the recipe list put on a locked card. */
+export function unlockLabel(item: Unlockable): string {
+  return item.unlockStars ? `Fame star ${item.unlockStars}` : `Level ${item.unlockLevel}`;
+}
 
 /** Total XP required to reach a given level. */
 export function xpForLevel(level: number): number {
@@ -27,9 +47,100 @@ export function levelProgress(xp: number): { level: number; into: number; span: 
   return { level, into: xp - base, span: next - base };
 }
 
+/**
+ * Fame is what experience turns into once the restaurant level has nothing left
+ * to give. Every star costs more than the one before it, so the first arrives
+ * within a shift or two of capping out and the fifth is a fortnight's trading.
+ */
+export function fameForStar(star: number): number {
+  if (star <= 0) return 0;
+  let total = 0;
+  for (let s = 1; s <= star; s++) total += Math.round(2400 * Math.pow(s, 1.3));
+  return total;
+}
+
+/**
+ * Stars are deliberately uncapped: the rewards run out at five, but the number
+ * carries on so a maxed-out diner still has something that moves.
+ */
+export function starsForFame(fame: number): number {
+  if (!Number.isFinite(fame) || fame <= 0) return 0;
+  let star = 0;
+  while (star < 999 && fame >= fameForStar(star + 1)) star++;
+  return star;
+}
+
+/** Fame earned into the current star, and what the next one costs. */
+export function fameProgress(fame: number): { star: number; into: number; span: number } {
+  const star = starsForFame(fame);
+  const base = fameForStar(star);
+  return { star, into: Math.max(0, fame - base), span: fameForStar(star + 1) - base };
+}
+
+/**
+ * What each of the first stars is worth. Recipes, furniture and faces are gated
+ * on the catalogue itself — see `unlocksAtStar` — so what lives here is the
+ * title the diner earns and the capacity the room is allowed past its cap.
+ */
+export interface StarReward {
+  star: number;
+  /** Shown on Manage as what the diner is now known as. */
+  title: string;
+  note: string;
+  menuSlots?: number;
+  staffSlots?: number;
+}
+
+export const STAR_REWARDS: readonly StarReward[] = [
+  {
+    star: 1,
+    title: 'Word of Mouth',
+    note: 'A recipe you only cook for people who ask for it by name.',
+  },
+  {
+    star: 2,
+    title: 'Corner Institution',
+    note: 'One more menu slot than the room was ever meant to hold.',
+    menuSlots: 1,
+  },
+  {
+    star: 3,
+    title: 'Local Landmark',
+    note: 'Framed faces for the wall. The regulars are what got you here.',
+  },
+  {
+    star: 4,
+    title: 'Name in the Paper',
+    note: 'Another pair of hands on the payroll, and a critic to feed.',
+    staffSlots: 1,
+  },
+  {
+    star: 5,
+    title: 'Diner of the Year',
+    note: 'The bronze goes by the door. After this, stars are simply the score.',
+  },
+];
+
+/** The last title the diner has earned, or null before the first star. */
+export function fameTitle(stars: number): string | null {
+  let title: string | null = null;
+  for (const reward of STAR_REWARDS) {
+    if (reward.star <= stars) title = reward.title;
+  }
+  return title;
+}
+
+function starBonus(stars: number, field: 'menuSlots' | 'staffSlots'): number {
+  let total = 0;
+  for (const reward of STAR_REWARDS) {
+    if (reward.star <= stars) total += reward[field] ?? 0;
+  }
+  return total;
+}
+
 /** Dishes that may be on the menu at once. */
-export function menuCapacity(level: number): number {
-  return Math.min(12, 4 + Math.floor(level / 2));
+export function menuCapacity(level: number, stars = 0): number {
+  return Math.min(12, 4 + Math.floor(level / 2)) + starBonus(stars, 'menuSlots');
 }
 
 /**
@@ -37,8 +148,8 @@ export function menuCapacity(level: number): number {
  * player can run a waiter, a chef and a cleaner, which is the minimum viable
  * kitchen the tutorial asks them to build.
  */
-export function staffCapacity(level: number): number {
-  return Math.min(12, 3 + Math.floor(level / 2));
+export function staffCapacity(level: number, stars = 0): number {
+  return Math.min(12, 3 + Math.floor(level / 2)) + starBonus(stars, 'staffSlots');
 }
 
 export const MIN_GRID = 8;
@@ -59,11 +170,36 @@ export function canExpand(size: number): boolean {
   return size + 2 <= MAX_GRID;
 }
 
-/** Everything newly available at `level`, for the level-up celebration. */
-export function unlocksAtLevel(level: number): { dishes: string[]; furniture: string[] } {
+/** Everything a celebration can name, by what it is. */
+export interface Unlocks {
+  dishes: string[];
+  furniture: string[];
+  regulars: string[];
+}
+
+/**
+ * Everything newly available at `level`, for the level-up celebration. Anything
+ * that also wants fame stars belongs to `unlocksAtStar` instead, so reaching the
+ * cap never promises something the player cannot go and use.
+ */
+export function unlocksAtLevel(level: number): Unlocks {
+  const byLevel = <T extends Unlockable>(item: T): boolean =>
+    item.unlockLevel === level && !item.unlockStars;
   return {
-    dishes: DISHES.filter((d) => d.unlockLevel === level).map((d) => d.name),
-    furniture: FURNITURE.filter((f) => f.unlockLevel === level).map((f) => f.name),
+    dishes: DISHES.filter(byLevel).map((d) => d.name),
+    furniture: FURNITURE.filter(byLevel).map((f) => f.name),
+    regulars: REGULARS.filter((r) => (r.unlockLevel ?? 1) === level && !r.unlockStars)
+      .map((r) => r.name),
+  };
+}
+
+/** Everything a fame star brings with it, for the star celebration. */
+export function unlocksAtStar(star: number): Unlocks {
+  const byStar = <T extends Unlockable>(item: T): boolean => item.unlockStars === star;
+  return {
+    dishes: DISHES.filter(byStar).map((d) => d.name),
+    furniture: FURNITURE.filter(byStar).map((f) => f.name),
+    regulars: REGULARS.filter((r) => r.unlockStars === star).map((r) => r.name),
   };
 }
 
