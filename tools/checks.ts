@@ -7,6 +7,7 @@
  * source with esbuild and asserts against it, rather than reimplementing logic.
  */
 
+import { Camera } from '../src/engine/camera';
 import { TILE_H, TILE_W, TILE_Z, tileToWorld, worldToTile } from '../src/engine/iso';
 import { nearestActor } from '../src/game/pick';
 import {
@@ -27,6 +28,7 @@ import { favouriteFor, nextVisitDelay, refreshFavourite } from '../src/game/regu
 import { Simulation } from '../src/game/sim';
 import { createNewGame, Game, SAVE_KEY } from '../src/game/state';
 import type { Order, SaveData, Staff } from '../src/game/types';
+import { buildingBox } from '../src/render/renderer';
 import { COACH_STEPS } from '../src/ui/tutorial';
 
 let failures = 0;
@@ -388,6 +390,81 @@ group('A tap lands on what it looks like it lands on', () => {
       grid.anyAt(Math.floor(onFloor.tx), Math.floor(onFloor.ty)) === undefined,
     );
   }
+});
+
+group('A tap on the pixels a guest is drawn at seats that guest', () => {
+  // The whole path, from a screen coordinate through the camera to a guest
+  // walking to a chair. Everything but the canvas is real: the camera is the one
+  // the game runs, framed on a portrait phone, which is the layout where the
+  // queue sits highest on screen.
+  const game = new Game(createNewGame());
+  const sim = new Simulation(game);
+  const camera = new Camera();
+  camera.setViewport(390, 844);
+  const box = buildingBox(game.data.gridSize);
+  camera.snapTo(box.x + box.w / 2, box.y + box.h / 2, 1);
+
+  for (const t of game.placedWithRole('table')) t.dirty = true;
+  game.touch();
+  const queued = runUntil(sim, () => game.customers.some((c) => c.state === 'queueing'), 150);
+  check('a guest is queueing outside the door', queued);
+  if (!queued) return;
+
+  const guest = game.customers.find((c) => c.state === 'queueing')!;
+  const body = tileToWorld(guest.tx + 0.5, guest.ty + 0.5);
+  const onGuest = camera.worldToScreen(body.x, body.y);
+  check(
+    'the guest is on screen at all',
+    onGuest.x > 0 && onGuest.x < 390 && onGuest.y > 0 && onGuest.y < 844,
+    `${onGuest.x.toFixed(0)}, ${onGuest.y.toFixed(0)}`,
+  );
+
+  const pick = camera.screenToTile(onGuest.x, onGuest.y);
+  check(
+    'the pixel under them picks them out',
+    nearestActor(game.customers, pick.tx, pick.ty)?.id === guest.id,
+  );
+
+  for (const t of game.placedWithRole('table')) t.dirty = false;
+  game.touch();
+  const result = sim.seatGuest(nearestActor(game.customers, pick.tx, pick.ty)!);
+  check('the tap seats them', result.ok, result.message);
+  check('they took a chair', guest.chairUid !== null && guest.state === 'walkingToSeat');
+
+  // Their thought bubble floats well above them, and picking ignores height, so
+  // a tap on the bubble lands up-screen. Walking back down the depth diagonal is
+  // what makes the bubble itself tappable.
+  const bubble = camera.worldToScreen(body.x, body.y - 2.16 * TILE_Z);
+  const offBubble = camera.screenToTile(bubble.x, bubble.y);
+  check(
+    'a tap on the bubble misses the guest at face value',
+    nearestActor(game.customers, offBubble.tx, offBubble.ty) === null,
+  );
+  let recovered = false;
+  for (let back = 1; back <= 5.8 && !recovered; back += 0.25) {
+    recovered = nearestActor(game.customers, offBubble.tx + back, offBubble.ty + back)?.id === guest.id;
+  }
+  check('walking back down the diagonal finds them', recovered);
+
+  // Same story for the badge over a dirty table.
+  const table = game.placedWithRole('table')[0]!;
+  table.dirty = true;
+  game.touch();
+  const grid = new Grid(game);
+  grid.sync();
+  const tableWorld = tileToWorld(table.tx + 0.5, table.ty + 0.5);
+  const badge = camera.worldToScreen(tableWorld.x, tableWorld.y - 1.42 * TILE_Z);
+  const offBadge = camera.screenToTile(badge.x, badge.y);
+  check(
+    'a tap on the badge misses the table at face value',
+    grid.anyAt(Math.floor(offBadge.tx), Math.floor(offBadge.ty))?.uid !== table.uid,
+  );
+  let foundTable = false;
+  for (let back = 1; back <= 5.8 && !foundTable; back += 0.25) {
+    foundTable =
+      grid.anyAt(Math.floor(offBadge.tx + back), Math.floor(offBadge.ty + back))?.uid === table.uid;
+  }
+  check('walking back down the diagonal finds the table', foundTable);
 });
 
 group('Tapping a dirty table sends somebody to wipe it', () => {

@@ -10,7 +10,7 @@ import { nearestActor } from './game/pick';
 import { unlocksAtLevel } from './game/progression';
 import { Simulation, type CommandResult } from './game/sim';
 import { createNewGame, Game } from './game/state';
-import type { Placed } from './game/types';
+import type { Customer, Placed } from './game/types';
 import { buildingBox, Renderer, type BuildPreview } from './render/renderer';
 import type { AppApi, ConfirmOptions, PanelId } from './ui/api';
 import { el, fmt } from './ui/dom';
@@ -381,10 +381,34 @@ class App implements AppApi {
    * makes them feel unclickable.
    */
   private onPlayTap(fx: number, fy: number): void {
+    if (this.tapAt(fx, fy, false)) return;
+
+    /*
+     * Nothing on the floor there. The markers a player actually aims at — the
+     * badge over a dirty table, a guest's thought bubble, the z's over a worker
+     * who has stopped — are drawn well above the tile they belong to, and
+     * picking ignores height, so a tap on one lands on empty floor several steps
+     * up-screen. One unit of height shifts the pick by exactly one step along
+     * both tile axes, so walking back down that diagonal finds whatever the
+     * marker was attached to: the badge sits 1.4 up, a bubble around 2.2, a name
+     * plate 2.7, and the z's over a stopped worker higher still.
+     */
+    for (let back = 1; back <= 5.8; back += 0.25) {
+      if (this.tapAt(fx + back, fy + back, true)) return;
+    }
+  }
+
+  /**
+   * Act on whatever is at a fractional tile position. `viaMarker` restricts the
+   * hit to things that draw something above themselves, so probing up-screen for
+   * a badge can never quietly select a fixture the player was not pointing at.
+   */
+  private tapAt(fx: number, fy: number, viaMarker: boolean): boolean {
     const staff = nearestActor(this.game.data.staff, fx, fy);
     if (staff) {
-      audio.play('tap');
-      if (staff.state === 'exhausted' || staff.energy < 25) {
+      const spent = staff.state === 'exhausted' || staff.energy < 25;
+      if (spent) {
+        audio.play('tap');
         this.toast(
           staff.state === 'exhausted'
             ? `${staff.name} has stopped — feed them here`
@@ -392,44 +416,48 @@ class App implements AppApi {
           'bad',
         );
         this.openSheet('staff', 'team');
-        return;
+        return true;
       }
-      this.toast(
-        `${staff.name} is ${describeStaffState(staff.state)} (${Math.round(staff.energy)}% energy)`,
-        'info',
-      );
-      return;
+      if (!viaMarker) {
+        audio.play('tap');
+        this.toast(
+          `${staff.name} is ${describeStaffState(staff.state)} (${Math.round(staff.energy)}% energy)`,
+          'info',
+        );
+        return true;
+      }
     }
 
     const customer = nearestActor(this.game.customers, fx, fy);
-    if (customer) {
+    if (customer && (!viaMarker || hasMarker(customer))) {
       audio.play('tap');
       if (customer.state === 'queueing' || customer.state === 'entering') {
         this.runCommand(this.sim.seatGuest(customer));
-        return;
+        return true;
       }
       const patience = Math.round(customer.patience * 100);
       this.toast(`${customer.name} · ${patience}% patience left`, patience < 35 ? 'bad' : 'info');
-      return;
+      return true;
     }
 
-    const tx = Math.floor(fx);
-    const ty = Math.floor(fy);
-    const placed = this.sim.grid.anyAt(tx, ty);
-    if (!placed) return;
-    const def = this.game.defOf(placed);
-    if (!def) return;
-    audio.play('tap');
+    const placed = this.sim.grid.anyAt(Math.floor(fx), Math.floor(fy));
+    const def = placed ? this.game.defOf(placed) : undefined;
+    if (!placed || !def) return false;
 
     if (placed.dirty) {
+      audio.play('tap');
       this.runCommand(this.sim.cleanTable(placed));
-      return;
+      return true;
     }
     if (placed.plates?.length) {
+      audio.play('tap');
       this.runCommand(this.sim.runPlateOut(placed));
-      return;
+      return true;
     }
+    if (viaMarker) return false;
+    audio.play('tap');
     this.toast(def.name, 'info');
+    return true;
   }
 
   /** Report a command back to the player and keep the save honest. */
@@ -815,6 +843,12 @@ class App implements AppApi {
     );
     this.save();
   }
+}
+
+/** Whether this guest has a bubble or a name plate floating over them. */
+function hasMarker(c: Customer): boolean {
+  if (c.regularId !== null) return true;
+  return c.state !== 'entering' && c.state !== 'walkingToSeat' && c.state !== 'leaving';
 }
 
 function describeStaffState(state: string): string {
