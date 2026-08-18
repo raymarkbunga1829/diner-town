@@ -606,7 +606,9 @@ function migrate(data: SaveData): SaveData {
   merged.stats = { ...fresh.stats, ...(data.stats ?? {}) };
   // Saves written before the fame track have none, and a hand-edited one can
   // carry anything at all. Stars are read back out of this number, so a value
-  // that is not a positive number has to become zero rather than NaN.
+  // that is not a positive number has to become zero rather than NaN. A diner
+  // that ground away at the cap before fame existed starts from zero too, rather
+  // than being handed a fistful of stars it never watched itself earn.
   merged.fame = Number.isFinite(data.fame) ? Math.max(0, Number(data.fame)) : 0;
   // The clock is what says which day it is, so a ledger from any other day is
   // stale and starts again rather than being credited to today.
