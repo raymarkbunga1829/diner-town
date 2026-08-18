@@ -6,10 +6,11 @@ import { PointerInput } from './engine/input';
 import { clamp, tileToWorld, type Point } from './engine/iso';
 import { FURNITURE_BY_ID, isWallMounted, resaleValue } from './game/data/furniture';
 import { footprint } from './game/grid';
+import { nearestActor } from './game/pick';
 import { unlocksAtLevel } from './game/progression';
-import { Simulation } from './game/sim';
+import { Simulation, type CommandResult } from './game/sim';
 import { createNewGame, Game } from './game/state';
-import type { Placed } from './game/types';
+import type { Customer, Placed } from './game/types';
 import { buildingBox, Renderer, type BuildPreview } from './render/renderer';
 import type { AppApi, ConfirmOptions, PanelId } from './ui/api';
 import { el, fmt } from './ui/dom';
@@ -174,7 +175,9 @@ class App implements AppApi {
     this.ctx.restore();
 
     this.ui.updateStatus();
+    this.recapHold = Math.max(0, this.recapHold - dt);
     this.checkLevelUp();
+    this.checkDayRecap();
     this.checkCoach();
     this.checkPantryCrisis();
 
@@ -204,6 +207,10 @@ class App implements AppApi {
     lines.push({ label: 'Menu slots', value: String(this.game.menuCapacity) });
     lines.push({ label: 'Staff positions', value: String(this.game.staffCapacity) });
 
+    // Long enough to cover the delay below, so a day rolling over in the same
+    // frame does not slide its card under the celebration.
+    this.recapHold = 1.4;
+
     // Let the confetti land before the card covers the room, otherwise the only
     // celebration the player ever sees is a scrim over the top of it.
     window.setTimeout(() => {
@@ -214,6 +221,28 @@ class App implements AppApi {
         'Back to work',
       );
     }, 750);
+    this.save();
+  }
+
+  /** Seconds to sit on a queued recap, so a level-up card gets the room first. */
+  private recapHold = 0;
+
+  /**
+   * The day's card. A level-up landing in the same frame wins, because that is
+   * the better moment and the recap is still waiting once it is dismissed.
+   */
+  private checkDayRecap(): void {
+    const recap = this.game.pendingDayRecap;
+    if (!recap) return;
+    // Something is already covering the room: hold the recap rather than
+    // stacking a second card on top of it.
+    if (this.recapHold > 0 || this.game.pendingLevelUp !== null || this.ui.hasModal) return;
+    this.game.pendingDayRecap = null;
+    audio.play('bell');
+    this.ui.showDayRecap(recap, (action) => {
+      if (action.target === 'build') this.enterBuild();
+      else if (action.target) this.openSheet(action.target);
+    });
     this.save();
   }
 
@@ -316,7 +345,7 @@ class App implements AppApi {
     this.hoverFrac = { tx: t.tx, ty: t.ty };
 
     if (this.mode === 'build') this.onBuildTap();
-    else this.onPlayTap(Math.floor(t.tx), Math.floor(t.ty));
+    else this.onPlayTap(t.tx, t.ty);
   }
 
   /**
@@ -342,38 +371,117 @@ class App implements AppApi {
     return wall ? this.sim.grid.wallAt(wall[0], wall[1]) : undefined;
   }
 
-  private onPlayTap(tx: number, ty: number): void {
-    const staff = this.game.data.staff.find(
-      (s) => Math.round(s.tx) === tx && Math.round(s.ty) === ty,
-    );
+  /**
+   * A tap on the floor is a command, not an inspection. Guests, workers and
+   * fixtures each have one obvious thing the player would want to happen, and
+   * the sim answers with either a change or the reason there was none.
+   *
+   * Actors are picked by proximity rather than by tile, because a queueing guest
+   * stands on a fractional position outside the door and rounding them to a tile
+   * makes them feel unclickable.
+   */
+  private onPlayTap(fx: number, fy: number): void {
+    if (this.tapAt(fx, fy, false)) return;
+
+    /*
+     * Nothing on the floor there. The markers a player actually aims at — the
+     * badge over a dirty table, a guest's thought bubble, the z's over a worker
+     * who has stopped — are drawn well above the tile they belong to, and
+     * picking ignores height, so a tap on one lands on empty floor several steps
+     * up-screen. One unit of height shifts the pick by exactly one step along
+     * both tile axes, so walking back down that diagonal finds whatever the
+     * marker was attached to: the badge sits 1.4 up, a bubble around 2.2, a name
+     * plate 2.7, and the z's over a stopped worker higher still.
+     */
+    for (let back = 1; back <= 5.8; back += 0.25) {
+      if (this.tapAt(fx + back, fy + back, true)) return;
+    }
+  }
+
+  /**
+   * Act on whatever is at a fractional tile position. `viaMarker` restricts the
+   * hit to things that draw something above themselves, so probing up-screen for
+   * a badge can never quietly select a fixture the player was not pointing at.
+   */
+  private tapAt(fx: number, fy: number, viaMarker: boolean): boolean {
+    const staff = nearestActor(this.game.data.staff, fx, fy);
     if (staff) {
-      const status =
-        staff.state === 'exhausted'
-          ? 'is out of energy — feed them from the Staff panel'
-          : `is ${describeStaffState(staff.state)} (${Math.round(staff.energy)}% energy)`;
-      this.toast(`${staff.name} ${status}`, staff.state === 'exhausted' ? 'bad' : 'info');
-      audio.play('tap');
-      return;
-    }
-
-    const customer = this.game.customers.find(
-      (c) => Math.round(c.tx) === tx && Math.round(c.ty) === ty,
-    );
-    if (customer) {
-      const patience = Math.round(customer.patience * 100);
-      this.toast(`${customer.name} · ${patience}% patience left`, patience < 35 ? 'bad' : 'info');
-      audio.play('tap');
-      return;
-    }
-
-    const placed = this.sim.grid.anyAt(tx, ty);
-    if (placed) {
-      const def = this.game.defOf(placed);
-      if (def) {
-        this.toast(placed.dirty ? `${def.name} — needs cleaning` : def.name, placed.dirty ? 'bad' : 'info');
+      const spent = staff.state === 'exhausted' || staff.energy < 25;
+      if (spent) {
         audio.play('tap');
+        this.toast(
+          staff.state === 'exhausted'
+            ? `${staff.name} has stopped — feed them here`
+            : `${staff.name} is flagging at ${Math.round(staff.energy)}% — feed them here`,
+          'bad',
+        );
+        this.openSheet('staff', 'team');
+        return true;
+      }
+      if (!viaMarker) {
+        audio.play('tap');
+        this.toast(
+          `${staff.name} is ${describeStaffState(staff.state)} (${Math.round(staff.energy)}% energy)`,
+          'info',
+        );
+        return true;
       }
     }
+
+    const customer = nearestActor(this.game.customers, fx, fy);
+    if (customer && (!viaMarker || hasMarker(customer))) {
+      audio.play('tap');
+      if (customer.state === 'queueing' || customer.state === 'entering') {
+        this.runCommand(this.sim.seatGuest(customer));
+        return true;
+      }
+      const patience = Math.round(customer.patience * 100);
+      this.toast(`${customer.name} · ${patience}% patience left`, patience < 35 ? 'bad' : 'info');
+      return true;
+    }
+
+    const placed = this.sim.grid.anyAt(Math.floor(fx), Math.floor(fy));
+    const def = placed ? this.game.defOf(placed) : undefined;
+    if (!placed || !def) return false;
+
+    if (placed.dirty) {
+      audio.play('tap');
+      this.runCommand(this.sim.cleanTable(placed));
+      return true;
+    }
+    if (placed.plates?.length) {
+      audio.play('tap');
+      this.runCommand(this.sim.runPlateOut(placed));
+      return true;
+    }
+    if (viaMarker) return false;
+    audio.play('tap');
+    this.toast(def.name, 'info');
+    return true;
+  }
+
+  /** Report a command back to the player and keep the save honest. */
+  private runCommand(result: CommandResult): void {
+    this.toast(result.message, result.ok ? 'good' : result.kind);
+    if (result.ok) {
+      this.save();
+      return;
+    }
+    audio.play('error');
+    // Pan to whatever is in the way if it is not already in shot, so being told
+    // to tap the dirty table does not turn into a hunt around the room.
+    if (result.at && !this.isOnScreen(result.at)) this.focusTile(result.at.tx, result.at.ty);
+  }
+
+  private isOnScreen(at: { tx: number; ty: number }, margin = 70): boolean {
+    const w = tileToWorld(at.tx + 0.5, at.ty + 0.5);
+    const p = this.camera.worldToScreen(w.x, w.y);
+    return (
+      p.x > margin &&
+      p.x < this.camera.viewW - margin &&
+      p.y > margin &&
+      p.y < this.camera.viewH - margin
+    );
   }
 
   private onBuildTap(): void {
@@ -749,6 +857,12 @@ class App implements AppApi {
     );
     this.save();
   }
+}
+
+/** Whether this guest has a bubble or a name plate floating over them. */
+function hasMarker(c: Customer): boolean {
+  if (c.regularId !== null) return true;
+  return c.state !== 'entering' && c.state !== 'walkingToSeat' && c.state !== 'leaving';
 }
 
 function describeStaffState(state: string): string {

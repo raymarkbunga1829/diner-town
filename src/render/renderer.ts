@@ -1097,6 +1097,14 @@ export class Renderer {
         depth: depthOf(c.tx, c.ty, 5),
         draw: () => this.customerBubble(c, w.x, w.y, opts.time),
       });
+
+      // A regular is only a regular if the player can tell who walked in.
+      if (c.regularId !== null) {
+        overlays.push({
+          depth: depthOf(c.tx, c.ty, 6),
+          draw: () => this.nameTag(c.name, w.x, w.y - 2.7 * TILE_Z),
+        });
+      }
     }
 
     for (const s of this.game.data.staff) {
@@ -1240,6 +1248,33 @@ export class Renderer {
         ctx.stroke();
       }
     }
+    ctx.restore();
+  }
+
+  /**
+   * Name plate over a guest the player is meant to recognise. Cream on cherry
+   * like the rest of the diner's signage, and sat above the thought bubble so
+   * the two never fight for the same pixels.
+   */
+  private nameTag(name: string, x: number, y: number): void {
+    const { ctx } = this;
+    ctx.save();
+    ctx.font = '700 10px Fredoka, Nunito, system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const w = ctx.measureText(name).width + 14;
+    ctx.fillStyle = 'rgba(52, 28, 18, 0.22)';
+    roundRect(ctx, x - w / 2, y - 7.5, w, 17, 8.5);
+    ctx.fill();
+    ctx.fillStyle = '#c73a2e';
+    roundRect(ctx, x - w / 2, y - 9, w, 17, 8.5);
+    ctx.fill();
+    ctx.strokeStyle = '#fff8ea';
+    ctx.lineWidth = 1.6;
+    roundRect(ctx, x - w / 2, y - 9, w, 17, 8.5);
+    ctx.stroke();
+    ctx.fillStyle = '#fff8ea';
+    ctx.fillText(name, x, y - 0.2);
     ctx.restore();
   }
 

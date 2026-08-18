@@ -3,11 +3,19 @@ import { audio } from '../engine/audio';
 import { DISHES_BY_ID, dishCookTime, dishPrice } from './data/dishes';
 import type { FurnitureDef } from './data/furniture';
 import { INGREDIENT_LIST } from './data/ingredients';
+import { REGULARS_BY_ID } from './data/regulars';
 import { Grid } from './grid';
 import { advanceAlongPath, findPath } from './path';
 import { appearanceFrom, randomName, workSpeed } from './people';
+import { buildDayRecap, emptyLedger } from './recap';
+import {
+  nextVisitDelay,
+  refreshFavourite,
+  regularLook,
+  shortName,
+} from './regulars';
 import { RESTOCK_INTERVAL, type Game } from './state';
-import type { Customer, Order, Placed, Staff, StaffRole } from './types';
+import type { Customer, Order, Placed, RegularState, Staff, StaffRole } from './types';
 
 /** A position in tile space, used to pick the nearest surface to work from. */
 interface Point {
@@ -25,6 +33,40 @@ const CLEAN_SECONDS = 4.5;
 /** Energy consumed by each completed task. */
 const ENERGY_COST = { order: 1.1, serve: 1.1, cook: 1.7, clean: 1.5 };
 
+/**
+ * Outcome of a player command from the floor. `ok` means the world changed;
+ * anything else is an explanation the UI can show instead, because "nothing
+ * happened" is the one response a tap must never give.
+ */
+export interface CommandResult {
+  ok: boolean;
+  message: string;
+  kind: 'good' | 'bad' | 'info';
+  /** Tile the command acted on, for a ping or a camera nudge. */
+  at?: Point;
+}
+
+const refused = (message: string, at?: Point): CommandResult => ({
+  ok: false,
+  message,
+  kind: 'bad',
+  at,
+});
+
+const noted = (message: string, at?: Point): CommandResult => ({
+  ok: false,
+  message,
+  kind: 'info',
+  at,
+});
+
+const done = (message: string, at?: Point): CommandResult => ({
+  ok: true,
+  message,
+  kind: 'good',
+  at,
+});
+
 export class Simulation {
   readonly grid: Grid;
   private spawnTimer = 0;
@@ -33,6 +75,10 @@ export class Simulation {
   constructor(private readonly game: Game) {
     this.grid = new Grid(game);
     this.lastDay = game.dayNumber;
+    // A save can be reopened on a later day than its ledger was written for.
+    if (game.data.today.day !== this.lastDay) {
+      game.data.today = emptyLedger(this.lastDay);
+    }
   }
 
   update(realDt: number): void {
@@ -58,12 +104,13 @@ export class Simulation {
   private handleDayRollover(): void {
     const day = this.game.dayNumber;
     if (day === this.lastDay) return;
+    const closing = this.lastDay;
     this.lastDay = day;
     this.game.data.stats.daysOpen = day;
 
     const payroll = this.game.data.staff.reduce((sum, s) => sum + s.wage, 0);
+    const paid = Math.min(payroll, this.game.data.coins);
     if (payroll > 0) {
-      const paid = Math.min(payroll, this.game.data.coins);
       this.game.data.coins -= paid;
       this.game.data.stats.totalSpent += paid;
       this.game.addFloater(
@@ -76,8 +123,15 @@ export class Simulation {
         // Underpaid staff show up tired the next day.
         for (const s of this.game.data.staff) s.energy = Math.min(s.energy, 45);
       }
-      this.game.touch();
     }
+
+    // Built after payroll, so the card reports the till the player will wake up
+    // to rather than the one they went to bed with.
+    const ledger = { ...this.game.data.today, day: closing };
+    this.game.data.lastRecap = buildDayRecap(this.game, ledger, payroll, paid);
+    this.game.pendingDayRecap = this.game.data.lastRecap;
+    this.game.data.today = emptyLedger(day);
+    this.game.touch();
   }
 
   private handleRestock(): void {
@@ -117,17 +171,22 @@ export class Simulation {
   private spawnCustomer(): void {
     const id = this.game.nextId();
     const style = this.game.styleScore;
+    const regular = this.dueRegular();
+    const def = regular ? REGULARS_BY_ID[regular.id] : undefined;
+    const doorX = this.game.data.doorX;
+
     const c: Customer = {
       id,
-      name: randomName(this.game.rng),
-      look: appearanceFrom(`guest-${id}-${Math.floor(this.game.data.clock)}`),
+      name: def ? def.name : randomName(this.game.rng),
+      look: def ? regularLook(def) : appearanceFrom(`guest-${id}-${Math.floor(this.game.data.clock)}`),
       state: 'entering',
-      tx: this.game.data.doorX,
+      tx: doorX,
       ty: -2.4,
-      path: [[this.game.data.doorX, 0]],
+      path: [[doorX, 0]],
       patience: 1,
-      // Pleasant surroundings make people notably more forgiving.
-      patienceDrainPerSec: 1 / (34 + style * 34),
+      // Pleasant surroundings make people notably more forgiving, and somebody
+      // who chose to come back is more forgiving still.
+      patienceDrainPerSec: 1 / ((34 + style * 34) * (def ? 1.2 : 1)),
       chairUid: null,
       tableUid: null,
       dishId: null,
@@ -137,8 +196,37 @@ export class Simulation {
       angry: false,
       queueSlot: this.game.customers.filter((x) => x.state === 'queueing').length,
       spawnedAt: this.game.data.clock,
+      regularId: regular?.id ?? null,
     };
     this.game.customers.push(c);
+
+    if (regular && def) {
+      refreshFavourite(regular, this.game.data.menu);
+      // Booked forward on arrival as well as on the way out, so a guest who is
+      // still inside can never be spawned a second time.
+      regular.nextVisitAt = this.game.data.clock + nextVisitDelay(def, 'fed');
+      this.game.addFloater(`${shortName(def.name)} is back!`, doorX, -1, 'info');
+      this.game.touch();
+    }
+  }
+
+  /** The regular who is furthest overdue and not already in the room. */
+  private dueRegular(): RegularState | null {
+    const clock = this.game.data.clock;
+    const inside = new Set(
+      this.game.customers.map((c) => c.regularId).filter((id): id is string => id !== null),
+    );
+    let best: RegularState | null = null;
+    for (const r of this.game.data.regulars) {
+      if (r.nextVisitAt > clock || inside.has(r.id) || !REGULARS_BY_ID[r.id]) continue;
+      if (!best || r.nextVisitAt < best.nextVisitAt) best = r;
+    }
+    return best;
+  }
+
+  private regularOf(c: Customer): RegularState | undefined {
+    if (c.regularId === null) return undefined;
+    return this.game.data.regulars.find((r) => r.id === c.regularId);
   }
 
   private usableSeats(): Placed[] {
@@ -147,12 +235,16 @@ export class Simulation {
       .filter((chair) => this.grid.isUsableSeat(chair));
   }
 
-  private freeSeat(): Placed | null {
+  /** Usable seats nobody has claimed, whether or not their table is clean. */
+  private unclaimedSeats(): Placed[] {
     const taken = new Set(
       this.game.customers.map((c) => c.chairUid).filter((u): u is number => u !== null),
     );
-    for (const chair of this.usableSeats()) {
-      if (taken.has(chair.uid)) continue;
+    return this.usableSeats().filter((chair) => !taken.has(chair.uid));
+  }
+
+  private freeSeat(): Placed | null {
+    for (const chair of this.unclaimedSeats()) {
       const table = this.grid.tableForChair(chair);
       if (!table || table.dirty) continue;
       return chair;
@@ -213,7 +305,7 @@ export class Simulation {
       case 'deciding': {
         c.timer -= dt;
         if (c.timer > 0) break;
-        const dish = this.chooseDish();
+        const dish = this.dishFor(c);
         if (!dish) {
           this.giveUp(c, 'Nothing on the menu!');
           break;
@@ -270,6 +362,19 @@ export class Simulation {
     c.ty += (targetY - c.ty) * Math.min(1, dt * 3);
   }
 
+  /**
+   * What this guest orders. A regular asks for their favourite whenever the
+   * kitchen can produce it, which is what makes keeping that dish stocked and on
+   * the menu worth doing.
+   */
+  private dishFor(c: Customer): string | null {
+    const favourite = this.regularOf(c)?.favouriteDishId;
+    if (favourite && this.game.data.menu.includes(favourite) && this.game.canCook(favourite)) {
+      return favourite;
+    }
+    return this.chooseDish();
+  }
+
   /** Pick a dish from the menu, favouring appealing ones we can actually cook. */
   private chooseDish(): string | null {
     const options = this.game.data.menu.filter((id) => DISHES_BY_ID[id] && this.game.canCook(id));
@@ -293,10 +398,12 @@ export class Simulation {
     c.angry = true;
     c.satisfaction = 0.05;
     this.game.data.stats.customersLost++;
+    this.game.data.today.walkouts++;
     this.game.recordSatisfaction(0.05);
     this.game.addFloater(reason, c.tx, c.ty, 'bad');
     this.game.fx.puff(c.tx, c.ty, '#c6a493');
     if (!this.game.data.settings.muted) audio.play('unhappy');
+    if (c.regularId !== null) this.snubRegular(c);
     this.cancelOrderFor(c);
     if (c.tableUid !== null) {
       const table = this.game.placedByUid(c.tableUid);
@@ -311,23 +418,27 @@ export class Simulation {
 
   private finishMeal(c: Customer): void {
     const dish = c.dishId ? DISHES_BY_ID[c.dishId] : undefined;
+    let paid = 0;
     if (dish) {
       const level = this.game.dishLevel(dish.id);
       const chair = c.chairUid !== null ? this.game.placedByUid(c.chairUid) : undefined;
       const comfort = chair ? (this.game.defOf(chair)?.comfort ?? 1) : 1;
       const mood = 0.7 + 0.55 * c.patience;
       const style = 1 + this.game.styleScore * 0.3;
-      const paid = Math.max(1, Math.round(dishPrice(dish, level) * comfort * mood * style));
+      paid = Math.max(1, Math.round(dishPrice(dish, level) * comfort * mood * style));
 
       this.game.earn(paid, { tx: c.tx, ty: c.ty });
       this.game.addXp(Math.round(dish.basePrice * 0.45) + 4, { tx: c.tx, ty: c.ty - 0.4 });
       this.game.data.stats.customersServed++;
+      this.game.data.today.covers++;
+      this.game.data.today.dishEarnings += paid;
       this.game.fx.coins(c.tx, c.ty, paid / 60);
       if (!this.game.data.settings.muted) audio.play('coin');
     }
 
     c.satisfaction = 0.25 + 0.75 * c.patience;
     this.game.recordSatisfaction(c.satisfaction);
+    if (c.regularId !== null) this.settleRegular(c, paid);
 
     if (c.tableUid !== null) {
       const table = this.game.placedByUid(c.tableUid);
@@ -337,6 +448,57 @@ export class Simulation {
       }
     }
     this.sendHome(c);
+  }
+
+  /*
+   * A regular's visit has to be able to go well or badly, otherwise they are
+   * just a walk-in with a name. Getting their favourite in front of them while
+   * they are still in a good mood pays a tip and counts for more towards the
+   * service score than one cover would; letting them walk out costs the same
+   * score twice over and pushes their next visit well out.
+   */
+
+  private settleRegular(c: Customer, paid: number): void {
+    const state = this.regularOf(c);
+    const def = state ? REGULARS_BY_ID[state.id] : undefined;
+    if (!state || !def) return;
+
+    state.visits++;
+    const delighted =
+      state.favouriteDishId !== null &&
+      c.dishId === state.favouriteDishId &&
+      c.patience > 0.45;
+
+    if (delighted) {
+      state.delighted++;
+      const tip = Math.max(5, Math.round(paid * 0.35));
+      this.game.earn(tip, { tx: c.tx, ty: c.ty - 0.5 });
+      this.game.addFloater(`${shortName(def.name)}'s favourite!`, c.tx, c.ty - 1, 'coin');
+      this.game.addXp(8);
+      this.game.recordSatisfaction(1);
+      this.game.fx.coins(c.tx, c.ty, tip / 40);
+      this.game.data.today.tips += tip;
+      this.game.data.today.regularsDelighted++;
+      if (!this.game.data.settings.muted) audio.play('bell');
+    }
+
+    state.nextVisitAt =
+      this.game.data.clock + nextVisitDelay(def, delighted ? 'delighted' : 'fed');
+    this.game.touch();
+  }
+
+  private snubRegular(c: Customer): void {
+    const state = this.regularOf(c);
+    const def = state ? REGULARS_BY_ID[state.id] : undefined;
+    if (!state || !def) return;
+
+    state.visits++;
+    state.walkouts++;
+    this.game.data.today.regularsLost++;
+    this.game.addFloater(`${shortName(def.name)} will remember that`, c.tx, c.ty - 1, 'bad');
+    this.game.recordSatisfaction(0);
+    state.nextVisitAt = this.game.data.clock + nextVisitDelay(def, 'snubbed');
+    this.game.touch();
   }
 
   private sendHome(c: Customer): void {
@@ -367,6 +529,133 @@ export class Simulation {
       if (at >= 0) holder.plates.splice(at, 1);
     }
     order.holdingUid = null;
+  }
+
+  // -------------------------------------------------------- player commands
+
+  /*
+   * The floor runs itself, so a command is only worth having if it beats
+   * waiting: these let the player choose *which* guest gets the next seat,
+   * *which* table is wiped first and *which* plate goes out now. Each one either
+   * changes the world or explains why it cannot, and each one goes through the
+   * same job helpers the AI uses, so a commanded job can be interrupted and
+   * handed back exactly like one the AI picked up.
+   */
+
+  /** Staff who could take a new job right now, best-suited and nearest first. */
+  private availableStaff(from: Point, prefer: StaffRole): Staff[] {
+    const distance = (s: Staff): number => Math.abs(s.tx - from.tx) + Math.abs(s.ty - from.ty);
+    return this.game.data.staff
+      .filter((s) => s.energy > 0)
+      // 'walking' with no target is the idle drift, which is free to interrupt.
+      .filter((s) => s.state === 'idle' || (s.state === 'walking' && s.targetUid === null))
+      .sort((a, b) => {
+        const byRole = (a.role === prefer ? 0 : 1) - (b.role === prefer ? 0 : 1);
+        return byRole !== 0 ? byRole : distance(a) - distance(b);
+      });
+  }
+
+  /** Why nobody could be sent, phrased as the fix rather than the symptom. */
+  private noStaffReason(prefer: StaffRole): string {
+    if (!this.game.data.staff.length) return 'Hire someone from the Staff panel first';
+    if (this.game.data.staff.every((s) => s.energy <= 0 || s.state === 'exhausted')) {
+      return 'Your whole team is out of energy — feed them from the Staff panel';
+    }
+    const role = prefer === 'cleaner' ? 'cleaner' : 'waiter';
+    return `Everyone is busy — hire another ${role}`;
+  }
+
+  /** Walk a specific guest to the nearest clean seat, or say what is blocking it. */
+  seatGuest(c: Customer): CommandResult {
+    this.grid.sync();
+    const at: Point = { tx: c.tx, ty: c.ty };
+    if (c.state !== 'queueing' && c.state !== 'entering') {
+      return noted(`${c.name} already has a table`, at);
+    }
+
+    const unclaimed = this.unclaimedSeats();
+    const clean = unclaimed
+      .filter((chair) => !this.grid.tableForChair(chair)?.dirty)
+      .sort((a, b) => this.distanceTo(c, this.grid.accessTiles(a)) -
+        this.distanceTo(c, this.grid.accessTiles(b)));
+
+    const chair = clean[0];
+    if (!chair) {
+      if (!this.usableSeats().length) {
+        return refused('No usable seats — a chair only works when it touches a table', at);
+      }
+      if (!unclaimed.length) return refused('Every seat is taken — place another table', at);
+      // Ring the table that is in the way, so "it is dirty" points at something.
+      const blocked = this.grid.tableForChair(unclaimed[0]!);
+      if (blocked) this.game.fx.command(blocked.tx, blocked.ty);
+      return refused(
+        'The free seat is still dirty — tap the table to get it wiped',
+        blocked ? { tx: blocked.tx, ty: blocked.ty } : at,
+      );
+    }
+
+    const path = findPath(this.grid, Math.round(c.tx), Math.round(c.ty), this.grid.accessTiles(chair));
+    if (!path) return refused('That seat cannot be reached from the door', at);
+
+    c.chairUid = chair.uid;
+    c.tableUid = this.grid.tableForChair(chair)?.uid ?? null;
+    c.path = path;
+    c.state = 'walkingToSeat';
+    this.game.fx.command(chair.tx, chair.ty);
+    return done(`${c.name} is on their way to a table`, { tx: chair.tx, ty: chair.ty });
+  }
+
+  /** Send the nearest free worker to wipe one particular table. */
+  cleanTable(table: Placed): CommandResult {
+    this.grid.sync();
+    const at: Point = { tx: table.tx, ty: table.ty };
+    if (this.game.defOf(table)?.role !== 'table') {
+      return noted('Only tables need wiping', at);
+    }
+    if (!table.dirty) return noted('That table is already clean', at);
+    if (this.occupied(table)) return noted('Someone is still sitting there', at);
+
+    const already = this.game.data.staff.find(
+      (s) => s.state === 'cleaning' && s.targetUid === table.uid,
+    );
+    if (already) return noted(`${already.name} is already on it`, at);
+
+    for (const s of this.availableStaff(at, 'cleaner')) {
+      if (!this.startCleaning(s, table)) continue;
+      this.game.fx.command(table.tx, table.ty);
+      this.game.touch();
+      return done(`${s.name} is wiping that table`, at);
+    }
+    return refused(this.noStaffReason('cleaner'), at);
+  }
+
+  /**
+   * Run the plate waiting on this counter or stove out now. Clearing a holder is
+   * also how a blocked kitchen gets moving again, so it is worth a tap.
+   */
+  runPlateOut(holder: Placed): CommandResult {
+    this.grid.sync();
+    const at: Point = { tx: holder.tx, ty: holder.ty };
+    const waiting = this.game.orders
+      .filter((o) => o.state === 'ready' && o.holdingUid === holder.uid)
+      .sort((a, b) => a.placedAt - b.placedAt);
+    if (!waiting.length) return noted('No plate is waiting here', at);
+
+    const claimed = this.claimedOrders();
+    const next = waiting.find((o) => !claimed.has(o.id));
+    if (!next) {
+      const runner = this.game.data.staff.find((s) => waiting.some((o) => o.id === s.targetOrderId));
+      return noted(`${runner?.name ?? 'Someone'} is already fetching it`, at);
+    }
+
+    const dish = DISHES_BY_ID[next.dishId];
+    for (const s of this.availableStaff(at, 'waiter')) {
+      if (!this.startDelivery(s, next)) continue;
+      this.game.fx.command(holder.tx, holder.ty);
+      this.game.touch();
+      return done(`${s.name} is running the ${dish?.name ?? 'plate'} out`, at);
+    }
+    return refused(this.noStaffReason('waiter'), at);
   }
 
   // --------------------------------------------------------- releasing work
@@ -721,7 +1010,7 @@ export class Simulation {
 
     // Stock may have moved since the guest decided; fall back to anything cookable.
     let dishId = c.dishId;
-    if (!dishId || !this.game.canCook(dishId)) dishId = this.chooseDish();
+    if (!dishId || !this.game.canCook(dishId)) dishId = this.dishFor(c);
     if (!dishId) {
       this.giveUp(c, 'Out of ingredients!');
       this.resetStaff(s);
@@ -831,26 +1120,37 @@ export class Simulation {
         this.distanceTo(from, this.grid.accessTiles(b)))[0];
   }
 
-  private tryDeliverFood(s: Staff): boolean {
-    const claimed = new Set(
+  /** Orders somebody is already fetching, so two waiters never chase one plate. */
+  private claimedOrders(): Set<number> {
+    return new Set(
       this.game.data.staff
         .map((x) => (x.state === 'toKitchen' || x.state === 'carrying' || x.state === 'serving'
           ? x.targetOrderId : null))
         .filter((x): x is number => x !== null),
     );
+  }
+
+  /** Send `s` to collect a specific plated order. */
+  private startDelivery(s: Staff, order: Order): boolean {
+    if (order.holdingUid === null) return false;
+    const holder = this.game.placedByUid(order.holdingUid);
+    if (!holder) return false;
+    const path = findPath(this.grid, Math.round(s.tx), Math.round(s.ty), this.grid.accessTiles(holder));
+    if (!path) return false;
+    s.state = 'toKitchen';
+    s.path = path;
+    s.targetOrderId = order.id;
+    s.targetUid = holder.uid;
+    return true;
+  }
+
+  private tryDeliverFood(s: Staff): boolean {
+    const claimed = this.claimedOrders();
     const ready = this.game.orders
       .filter((o) => o.state === 'ready' && o.holdingUid !== null && !claimed.has(o.id))
       .sort((a, b) => a.placedAt - b.placedAt);
     for (const order of ready) {
-      const holder = this.game.placedByUid(order.holdingUid!);
-      if (!holder) continue;
-      const path = findPath(this.grid, Math.round(s.tx), Math.round(s.ty), this.grid.accessTiles(holder));
-      if (!path) continue;
-      s.state = 'toKitchen';
-      s.path = path;
-      s.targetOrderId = order.id;
-      s.targetUid = holder.uid;
-      return true;
+      if (this.startDelivery(s, order)) return true;
     }
     return false;
   }
@@ -911,21 +1211,17 @@ export class Simulation {
     this.resetStaff(s);
   }
 
-  private tryClean(s: Staff): boolean {
-    const claimed = new Set(
+  /** Tables somebody is already on their way to wipe. */
+  private claimedTables(): Set<number> {
+    return new Set(
       this.game.data.staff
         .map((x) => (x.state === 'cleaning' ? x.targetUid : null))
         .filter((x): x is number => x !== null),
     );
-    const dirty = this.game
-      .placedWithRole('table')
-      .filter((t) => t.dirty && !claimed.has(t.uid))
-      .filter((t) => !this.game.customers.some((c) => c.tableUid === t.uid && c.state !== 'leaving'))
-      .sort((a, b) => this.distanceTo(s, this.grid.accessTiles(a)) -
-        this.distanceTo(s, this.grid.accessTiles(b)));
-    const table = dirty[0];
-    if (!table) return false;
+  }
 
+  /** Send `s` to wipe a specific table. */
+  private startCleaning(s: Staff, table: Placed): boolean {
     const path = findPath(this.grid, Math.round(s.tx), Math.round(s.ty), this.grid.accessTiles(table));
     if (!path) return false;
     s.state = 'cleaning';
@@ -936,6 +1232,24 @@ export class Simulation {
     const roleFactor = s.role === 'cleaner' ? 1 : 0.65;
     s.timer = CLEAN_SECONDS / (equipment * roleFactor);
     return true;
+  }
+
+  private tryClean(s: Staff): boolean {
+    const claimed = this.claimedTables();
+    const dirty = this.game
+      .placedWithRole('table')
+      .filter((t) => t.dirty && !claimed.has(t.uid))
+      .filter((t) => !this.occupied(t))
+      .sort((a, b) => this.distanceTo(s, this.grid.accessTiles(a)) -
+        this.distanceTo(s, this.grid.accessTiles(b)));
+    const table = dirty[0];
+    if (!table) return false;
+    return this.startCleaning(s, table);
+  }
+
+  /** True while a guest is still using this table. */
+  private occupied(table: Placed): boolean {
+    return this.game.customers.some((c) => c.tableUid === table.uid && c.state !== 'leaving');
   }
 
   private bestSinkSpeed(): number {

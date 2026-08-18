@@ -143,6 +143,33 @@ export class Fx {
     }
   }
 
+  /**
+   * Acknowledgement that a tap was read as an order: a bright ring over whatever
+   * the player just pointed at. Deliberately distinct from the warm suds and
+   * coins, so "I heard you" never reads as "that job is finished".
+   */
+  command(tx: number, ty: number): void {
+    const w = tileToWorld(tx + 0.5, ty + 0.5);
+    for (let i = 0; i < 10; i++) {
+      const a = (i / 10) * Math.PI * 2;
+      this.push({
+        kind: 'spark',
+        x: w.x + Math.cos(a) * 15,
+        y: w.y - 14 + Math.sin(a) * 7,
+        vx: Math.cos(a) * 34,
+        vy: Math.sin(a) * 17 - 12,
+        gravity: 24,
+        life: 0.32 + Math.random() * 0.18,
+        maxLife: 0.5,
+        size: 2.2 + Math.random() * 1.4,
+        colour: i % 2 === 0 ? '#ffe9a8' : '#fff8ea',
+        rot: 0,
+        spin: 0,
+        wobble: 0,
+      });
+    }
+  }
+
   /** Suds and shine when a table gets wiped down. */
   clean(tx: number, ty: number): void {
     const w = tileToWorld(tx + 0.5, ty + 0.5);

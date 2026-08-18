@@ -38,7 +38,7 @@ function firstCleaner(game: Game): CoachFocus | null {
 export const COACH_STEPS: readonly CoachStep[] = [
   {
     html:
-      'Welcome to your diner. Guests arrive through the door, look for a <b>clean seat next to a table</b>, then order from your menu.',
+      'Welcome to your diner. Guests arrive through the door, look for a <b>clean seat next to a table</b>, then order from your menu. Tap a waiting guest to seat them yourself.',
     done: (_game, seen) => seen.has('intro'),
     cta: 'Show me',
     mark: 'intro',
@@ -66,6 +66,13 @@ export const COACH_STEPS: readonly CoachStep[] = [
     html:
       'More seats means more covers. Tap <b>Build</b>, pick a table and some chairs, and remember a chair only works when it touches a table.',
     done: (game) => game.seatCount >= 5,
+  },
+  {
+    html:
+      'You can work the floor yourself. <b>Tap a dirty table</b> to send your nearest free hand, tap a waiting plate to run it out, and tap a tired worker to feed them.',
+    done: (_game, seen) => seen.has('tap-to-help'),
+    cta: 'Got it',
+    mark: 'tap-to-help',
   },
   {
     html:
