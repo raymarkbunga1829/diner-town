@@ -7,7 +7,7 @@ import { clamp, tileToWorld, type Point } from './engine/iso';
 import { FURNITURE_BY_ID, isWallMounted, resaleValue } from './game/data/furniture';
 import { footprint } from './game/grid';
 import { unlocksAtLevel } from './game/progression';
-import { Simulation } from './game/sim';
+import { Simulation, type CommandResult } from './game/sim';
 import { createNewGame, Game } from './game/state';
 import type { Placed } from './game/types';
 import { buildingBox, Renderer, type BuildPreview } from './render/renderer';
@@ -316,7 +316,7 @@ class App implements AppApi {
     this.hoverFrac = { tx: t.tx, ty: t.ty };
 
     if (this.mode === 'build') this.onBuildTap();
-    else this.onPlayTap(Math.floor(t.tx), Math.floor(t.ty));
+    else this.onPlayTap(t.tx, t.ty);
   }
 
   /**
@@ -342,38 +342,75 @@ class App implements AppApi {
     return wall ? this.sim.grid.wallAt(wall[0], wall[1]) : undefined;
   }
 
-  private onPlayTap(tx: number, ty: number): void {
-    const staff = this.game.data.staff.find(
-      (s) => Math.round(s.tx) === tx && Math.round(s.ty) === ty,
-    );
+  /**
+   * A tap on the floor is a command, not an inspection. Guests, workers and
+   * fixtures each have one obvious thing the player would want to happen, and
+   * the sim answers with either a change or the reason there was none.
+   *
+   * Actors are picked by proximity rather than by tile, because a queueing guest
+   * stands on a fractional position outside the door and rounding them to a tile
+   * makes them feel unclickable.
+   */
+  private onPlayTap(fx: number, fy: number): void {
+    const staff = nearestActor(this.game.data.staff, fx, fy);
     if (staff) {
-      const status =
-        staff.state === 'exhausted'
-          ? 'is out of energy — feed them from the Staff panel'
-          : `is ${describeStaffState(staff.state)} (${Math.round(staff.energy)}% energy)`;
-      this.toast(`${staff.name} ${status}`, staff.state === 'exhausted' ? 'bad' : 'info');
       audio.play('tap');
+      if (staff.state === 'exhausted' || staff.energy < 25) {
+        this.toast(
+          staff.state === 'exhausted'
+            ? `${staff.name} has stopped — feed them here`
+            : `${staff.name} is flagging at ${Math.round(staff.energy)}% — feed them here`,
+          'bad',
+        );
+        this.openSheet('staff', 'team');
+        return;
+      }
+      this.toast(
+        `${staff.name} is ${describeStaffState(staff.state)} (${Math.round(staff.energy)}% energy)`,
+        'info',
+      );
       return;
     }
 
-    const customer = this.game.customers.find(
-      (c) => Math.round(c.tx) === tx && Math.round(c.ty) === ty,
-    );
+    const customer = nearestActor(this.game.customers, fx, fy);
     if (customer) {
+      audio.play('tap');
+      if (customer.state === 'queueing' || customer.state === 'entering') {
+        this.runCommand(this.sim.seatGuest(customer));
+        return;
+      }
       const patience = Math.round(customer.patience * 100);
       this.toast(`${customer.name} · ${patience}% patience left`, patience < 35 ? 'bad' : 'info');
-      audio.play('tap');
       return;
     }
 
+    const tx = Math.floor(fx);
+    const ty = Math.floor(fy);
     const placed = this.sim.grid.anyAt(tx, ty);
-    if (placed) {
-      const def = this.game.defOf(placed);
-      if (def) {
-        this.toast(placed.dirty ? `${def.name} — needs cleaning` : def.name, placed.dirty ? 'bad' : 'info');
-        audio.play('tap');
-      }
+    if (!placed) return;
+    const def = this.game.defOf(placed);
+    if (!def) return;
+    audio.play('tap');
+
+    if (placed.dirty) {
+      this.runCommand(this.sim.cleanTable(placed));
+      return;
     }
+    if (placed.plates?.length) {
+      this.runCommand(this.sim.runPlateOut(placed));
+      return;
+    }
+    this.toast(def.name, 'info');
+  }
+
+  /** Report a command back to the player and keep the save honest. */
+  private runCommand(result: CommandResult): void {
+    this.toast(result.message, result.ok ? 'good' : result.kind);
+    if (!result.ok) {
+      audio.play('error');
+      return;
+    }
+    this.save();
   }
 
   private onBuildTap(): void {
@@ -749,6 +786,29 @@ class App implements AppApi {
     );
     this.save();
   }
+}
+
+/**
+ * The actor closest to a fractional tile pick, if one is near enough to have
+ * plausibly been aimed at. Actors are drawn at the centre of their tile, so the
+ * comparison is against `tx + 0.5`.
+ */
+function nearestActor<T extends { tx: number; ty: number }>(
+  actors: readonly T[],
+  fx: number,
+  fy: number,
+  radius = 0.85,
+): T | null {
+  let best: T | null = null;
+  let bestDistance = radius;
+  for (const a of actors) {
+    const d = Math.hypot(fx - (a.tx + 0.5), fy - (a.ty + 0.5));
+    if (d < bestDistance) {
+      bestDistance = d;
+      best = a;
+    }
+  }
+  return best;
 }
 
 function describeStaffState(state: string): string {

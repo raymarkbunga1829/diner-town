@@ -25,6 +25,40 @@ const CLEAN_SECONDS = 4.5;
 /** Energy consumed by each completed task. */
 const ENERGY_COST = { order: 1.1, serve: 1.1, cook: 1.7, clean: 1.5 };
 
+/**
+ * Outcome of a player command from the floor. `ok` means the world changed;
+ * anything else is an explanation the UI can show instead, because "nothing
+ * happened" is the one response a tap must never give.
+ */
+export interface CommandResult {
+  ok: boolean;
+  message: string;
+  kind: 'good' | 'bad' | 'info';
+  /** Tile the command acted on, for a ping or a camera nudge. */
+  at?: Point;
+}
+
+const refused = (message: string, at?: Point): CommandResult => ({
+  ok: false,
+  message,
+  kind: 'bad',
+  at,
+});
+
+const noted = (message: string, at?: Point): CommandResult => ({
+  ok: false,
+  message,
+  kind: 'info',
+  at,
+});
+
+const done = (message: string, at?: Point): CommandResult => ({
+  ok: true,
+  message,
+  kind: 'good',
+  at,
+});
+
 export class Simulation {
   readonly grid: Grid;
   private spawnTimer = 0;
@@ -147,12 +181,16 @@ export class Simulation {
       .filter((chair) => this.grid.isUsableSeat(chair));
   }
 
-  private freeSeat(): Placed | null {
+  /** Usable seats nobody has claimed, whether or not their table is clean. */
+  private unclaimedSeats(): Placed[] {
     const taken = new Set(
       this.game.customers.map((c) => c.chairUid).filter((u): u is number => u !== null),
     );
-    for (const chair of this.usableSeats()) {
-      if (taken.has(chair.uid)) continue;
+    return this.usableSeats().filter((chair) => !taken.has(chair.uid));
+  }
+
+  private freeSeat(): Placed | null {
+    for (const chair of this.unclaimedSeats()) {
       const table = this.grid.tableForChair(chair);
       if (!table || table.dirty) continue;
       return chair;
@@ -367,6 +405,127 @@ export class Simulation {
       if (at >= 0) holder.plates.splice(at, 1);
     }
     order.holdingUid = null;
+  }
+
+  // -------------------------------------------------------- player commands
+
+  /*
+   * The floor runs itself, so a command is only worth having if it beats
+   * waiting: these let the player choose *which* guest gets the next seat,
+   * *which* table is wiped first and *which* plate goes out now. Each one either
+   * changes the world or explains why it cannot, and each one goes through the
+   * same job helpers the AI uses, so a commanded job can be interrupted and
+   * handed back exactly like one the AI picked up.
+   */
+
+  /** Staff who could take a new job right now, best-suited and nearest first. */
+  private availableStaff(from: Point, prefer: StaffRole): Staff[] {
+    const distance = (s: Staff): number => Math.abs(s.tx - from.tx) + Math.abs(s.ty - from.ty);
+    return this.game.data.staff
+      .filter((s) => s.energy > 0)
+      // 'walking' with no target is the idle drift, which is free to interrupt.
+      .filter((s) => s.state === 'idle' || (s.state === 'walking' && s.targetUid === null))
+      .sort((a, b) => {
+        const byRole = (a.role === prefer ? 0 : 1) - (b.role === prefer ? 0 : 1);
+        return byRole !== 0 ? byRole : distance(a) - distance(b);
+      });
+  }
+
+  /** Why nobody could be sent, phrased as the fix rather than the symptom. */
+  private noStaffReason(prefer: StaffRole): string {
+    if (!this.game.data.staff.length) return 'Hire someone from the Staff panel first';
+    if (this.game.data.staff.every((s) => s.energy <= 0 || s.state === 'exhausted')) {
+      return 'Your whole team is out of energy — feed them from the Staff panel';
+    }
+    const role = prefer === 'cleaner' ? 'cleaner' : 'waiter';
+    return `Everyone is busy — hire another ${role}`;
+  }
+
+  /** Walk a specific guest to the nearest clean seat, or say what is blocking it. */
+  seatGuest(c: Customer): CommandResult {
+    this.grid.sync();
+    const at: Point = { tx: c.tx, ty: c.ty };
+    if (c.state !== 'queueing' && c.state !== 'entering') {
+      return noted(`${c.name} already has a table`, at);
+    }
+
+    const unclaimed = this.unclaimedSeats();
+    const clean = unclaimed
+      .filter((chair) => !this.grid.tableForChair(chair)?.dirty)
+      .sort((a, b) => this.distanceTo(c, this.grid.accessTiles(a)) -
+        this.distanceTo(c, this.grid.accessTiles(b)));
+
+    const chair = clean[0];
+    if (!chair) {
+      if (!this.usableSeats().length) {
+        return refused('No usable seats — a chair only works when it touches a table', at);
+      }
+      if (!unclaimed.length) return refused('Every seat is taken — place another table', at);
+      return refused('The free seat is still dirty — tap the table to get it wiped', at);
+    }
+
+    const path = findPath(this.grid, Math.round(c.tx), Math.round(c.ty), this.grid.accessTiles(chair));
+    if (!path) return refused('That seat cannot be reached from the door', at);
+
+    c.chairUid = chair.uid;
+    c.tableUid = this.grid.tableForChair(chair)?.uid ?? null;
+    c.path = path;
+    c.state = 'walkingToSeat';
+    this.game.fx.command(chair.tx, chair.ty);
+    return done(`${c.name} is on their way to a table`, { tx: chair.tx, ty: chair.ty });
+  }
+
+  /** Send the nearest free worker to wipe one particular table. */
+  cleanTable(table: Placed): CommandResult {
+    this.grid.sync();
+    const at: Point = { tx: table.tx, ty: table.ty };
+    if (this.game.defOf(table)?.role !== 'table') {
+      return noted('Only tables need wiping', at);
+    }
+    if (!table.dirty) return noted('That table is already clean', at);
+    if (this.occupied(table)) return noted('Someone is still sitting there', at);
+
+    const already = this.game.data.staff.find(
+      (s) => s.state === 'cleaning' && s.targetUid === table.uid,
+    );
+    if (already) return noted(`${already.name} is already on it`, at);
+
+    for (const s of this.availableStaff(at, 'cleaner')) {
+      if (!this.startCleaning(s, table)) continue;
+      this.game.fx.command(table.tx, table.ty);
+      this.game.touch();
+      return done(`${s.name} is wiping that table`, at);
+    }
+    return refused(this.noStaffReason('cleaner'), at);
+  }
+
+  /**
+   * Run the plate waiting on this counter or stove out now. Clearing a holder is
+   * also how a blocked kitchen gets moving again, so it is worth a tap.
+   */
+  runPlateOut(holder: Placed): CommandResult {
+    this.grid.sync();
+    const at: Point = { tx: holder.tx, ty: holder.ty };
+    const waiting = this.game.orders
+      .filter((o) => o.state === 'ready' && o.holdingUid === holder.uid)
+      .sort((a, b) => a.placedAt - b.placedAt);
+    if (!waiting.length) return noted('No plate is waiting here', at);
+
+    const claimed = this.claimedOrders();
+    const next = waiting.find((o) => !claimed.has(o.id));
+    if (!next) {
+      const runner = this.game.data.staff.find((s) => waiting.some((o) => o.id === s.targetOrderId));
+      return noted(`${runner?.name ?? 'Someone'} is already fetching it`, at);
+    }
+
+    const dish = DISHES_BY_ID[next.dishId];
+    for (const s of this.availableStaff(at, 'waiter')) {
+      if (!this.startDelivery(s, next)) continue;
+      this.game.fx.command(holder.tx, holder.ty);
+      this.game.touch();
+      return done(`${s.name} is running the ${dish?.name ?? 'plate'} out`, at);
+    }
+    return refused(this.noStaffReason('waiter'), at);
   }
 
   // --------------------------------------------------------- releasing work
@@ -831,26 +990,37 @@ export class Simulation {
         this.distanceTo(from, this.grid.accessTiles(b)))[0];
   }
 
-  private tryDeliverFood(s: Staff): boolean {
-    const claimed = new Set(
+  /** Orders somebody is already fetching, so two waiters never chase one plate. */
+  private claimedOrders(): Set<number> {
+    return new Set(
       this.game.data.staff
         .map((x) => (x.state === 'toKitchen' || x.state === 'carrying' || x.state === 'serving'
           ? x.targetOrderId : null))
         .filter((x): x is number => x !== null),
     );
+  }
+
+  /** Send `s` to collect a specific plated order. */
+  private startDelivery(s: Staff, order: Order): boolean {
+    if (order.holdingUid === null) return false;
+    const holder = this.game.placedByUid(order.holdingUid);
+    if (!holder) return false;
+    const path = findPath(this.grid, Math.round(s.tx), Math.round(s.ty), this.grid.accessTiles(holder));
+    if (!path) return false;
+    s.state = 'toKitchen';
+    s.path = path;
+    s.targetOrderId = order.id;
+    s.targetUid = holder.uid;
+    return true;
+  }
+
+  private tryDeliverFood(s: Staff): boolean {
+    const claimed = this.claimedOrders();
     const ready = this.game.orders
       .filter((o) => o.state === 'ready' && o.holdingUid !== null && !claimed.has(o.id))
       .sort((a, b) => a.placedAt - b.placedAt);
     for (const order of ready) {
-      const holder = this.game.placedByUid(order.holdingUid!);
-      if (!holder) continue;
-      const path = findPath(this.grid, Math.round(s.tx), Math.round(s.ty), this.grid.accessTiles(holder));
-      if (!path) continue;
-      s.state = 'toKitchen';
-      s.path = path;
-      s.targetOrderId = order.id;
-      s.targetUid = holder.uid;
-      return true;
+      if (this.startDelivery(s, order)) return true;
     }
     return false;
   }
@@ -911,21 +1081,17 @@ export class Simulation {
     this.resetStaff(s);
   }
 
-  private tryClean(s: Staff): boolean {
-    const claimed = new Set(
+  /** Tables somebody is already on their way to wipe. */
+  private claimedTables(): Set<number> {
+    return new Set(
       this.game.data.staff
         .map((x) => (x.state === 'cleaning' ? x.targetUid : null))
         .filter((x): x is number => x !== null),
     );
-    const dirty = this.game
-      .placedWithRole('table')
-      .filter((t) => t.dirty && !claimed.has(t.uid))
-      .filter((t) => !this.game.customers.some((c) => c.tableUid === t.uid && c.state !== 'leaving'))
-      .sort((a, b) => this.distanceTo(s, this.grid.accessTiles(a)) -
-        this.distanceTo(s, this.grid.accessTiles(b)));
-    const table = dirty[0];
-    if (!table) return false;
+  }
 
+  /** Send `s` to wipe a specific table. */
+  private startCleaning(s: Staff, table: Placed): boolean {
     const path = findPath(this.grid, Math.round(s.tx), Math.round(s.ty), this.grid.accessTiles(table));
     if (!path) return false;
     s.state = 'cleaning';
@@ -936,6 +1102,24 @@ export class Simulation {
     const roleFactor = s.role === 'cleaner' ? 1 : 0.65;
     s.timer = CLEAN_SECONDS / (equipment * roleFactor);
     return true;
+  }
+
+  private tryClean(s: Staff): boolean {
+    const claimed = this.claimedTables();
+    const dirty = this.game
+      .placedWithRole('table')
+      .filter((t) => t.dirty && !claimed.has(t.uid))
+      .filter((t) => !this.occupied(t))
+      .sort((a, b) => this.distanceTo(s, this.grid.accessTiles(a)) -
+        this.distanceTo(s, this.grid.accessTiles(b)));
+    const table = dirty[0];
+    if (!table) return false;
+    return this.startCleaning(s, table);
+  }
+
+  /** True while a guest is still using this table. */
+  private occupied(table: Placed): boolean {
+    return this.game.customers.some((c) => c.tableUid === table.uid && c.state !== 'leaving');
   }
 
   private bestSinkSpeed(): number {

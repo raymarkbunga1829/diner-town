@@ -18,6 +18,7 @@ import {
 import { FURNITURE_BY_ID } from '../src/game/data/furniture';
 import { Grid } from '../src/game/grid';
 import { findPath } from '../src/game/path';
+import { appearanceFrom } from '../src/game/people';
 import { Simulation } from '../src/game/sim';
 import { createNewGame, Game, SAVE_KEY } from '../src/game/state';
 import type { Order, Staff } from '../src/game/types';
@@ -258,9 +259,156 @@ group('Tutorial order', () => {
   check('counter is step 2', /pickup counter/i.test(html[1] ?? ''));
   check('cleaner is step 3', /cleaner/i.test(html[2] ?? ''));
   check('extra seats come after the cleaner', /More seats/i.test(html[3] ?? ''));
+  check('the welcome teaches the seating tap', /tap a waiting guest/i.test(html[0] ?? ''));
+  check('tapping the floor is taught', COACH_STEPS.some((s) => s.mark === 'tap-to-help'));
   check('Show me can place a missing counter', COACH_STEPS[1]?.placeIfMissing === 'counter_wood');
   check('counter step focuses the counter', typeof COACH_STEPS[1]?.focus === 'function');
   check('cleaner step focuses the cleaner', typeof COACH_STEPS[2]?.focus === 'function');
+});
+
+// -------------------------------------------------------------- tap to help
+
+group('Tapping a queueing guest seats them', () => {
+  const game = new Game(createNewGame());
+  const sim = new Simulation(game);
+
+  // Hold every table dirty so the AI cannot seat anyone, which leaves a real
+  // guest queueing for the player to act on.
+  for (const t of game.placedWithRole('table')) t.dirty = true;
+  game.touch();
+  const queued = runUntil(sim, () => game.customers.some((c) => c.state === 'queueing'), 120);
+  check('a guest is waiting at the door', queued);
+  if (!queued) return;
+
+  const guest = game.customers.find((c) => c.state === 'queueing')!;
+  const blocked = sim.seatGuest(guest);
+  check('a dirty room refuses the seat', !blocked.ok, blocked.message);
+  check('the refusal names the fix', /dirty|wiped/i.test(blocked.message), blocked.message);
+  check('the guest stayed in the queue', guest.state === 'queueing');
+
+  for (const t of game.placedWithRole('table')) t.dirty = false;
+  game.touch();
+  const seated = sim.seatGuest(guest);
+  check('a clean room accepts the seat', seated.ok, seated.message);
+  check('the guest claimed a chair', guest.chairUid !== null);
+  check('the guest claimed the table beside it', guest.tableUid !== null);
+  check('the guest is walking over', guest.state === 'walkingToSeat');
+  check(
+    'the chair really is a chair',
+    game.defOf(game.placedByUid(guest.chairUid!)!)?.role === 'chair',
+  );
+  check(
+    'nobody else was given the same chair',
+    game.customers.filter((c) => c.chairUid === guest.chairUid).length === 1,
+  );
+  check(
+    'the commanded guest goes on to order',
+    runUntil(sim, () => guest.state === 'awaitingWaiter' || guest.state === 'awaitingFood', 120),
+    `guest ended up ${guest.state}`,
+  );
+
+  const again = sim.seatGuest(guest);
+  check('seating a seated guest is a no-op', !again.ok && /already/i.test(again.message));
+});
+
+group('Tapping a dirty table sends somebody to wipe it', () => {
+  const game = new Game(createNewGame());
+  game.data.open = false;
+  const sim = new Simulation(game);
+  const table = game.placedWithRole('table')[0]!;
+
+  const clean = sim.cleanTable(table);
+  check('a clean table needs nothing', !clean.ok && /already clean/i.test(clean.message));
+
+  // No tick in between, so the wipe is the player's doing and not the AI's.
+  table.dirty = true;
+  game.touch();
+  const sent = sim.cleanTable(table);
+  check('the command was accepted', sent.ok, sent.message);
+  check('the cleaner was preferred', sent.message.startsWith('Mina'), sent.message);
+
+  const worker = game.data.staff.find((s) => s.state === 'cleaning' && s.targetUid === table.uid);
+  check('somebody is on their way', !!worker);
+  check('the named worker is the one going', !!worker && sent.message.startsWith(worker.name));
+
+  const busy = sim.cleanTable(table);
+  check('a second tap does not double up', !busy.ok && /already on it/i.test(busy.message));
+  check(
+    'only one worker is assigned',
+    game.data.staff.filter((s) => s.state === 'cleaning' && s.targetUid === table.uid).length === 1,
+  );
+  check(
+    'the table actually gets wiped',
+    runUntil(sim, () => !table.dirty, 60),
+    'table stayed dirty',
+  );
+
+  // A guest still eating is not somebody you can wipe around.
+  table.dirty = true;
+  game.customers.push({
+    id: 9001, name: 'Test Guest', look: appearanceFrom('check-guest'), state: 'eating',
+    tx: table.tx, ty: table.ty, path: [], patience: 1, patienceDrainPerSec: 0,
+    chairUid: null, tableUid: table.uid, dishId: null, orderId: null, timer: 99,
+    satisfaction: 1, angry: false, queueSlot: 0, spawnedAt: 0,
+  });
+  const occupied = sim.cleanTable(table);
+  check('an occupied table is left alone', !occupied.ok && /sitting/i.test(occupied.message));
+});
+
+group('Tapping a waiting plate runs it out', () => {
+  const game = new Game(createNewGame());
+  const sim = new Simulation(game);
+  const plated = runUntil(sim, () =>
+    game.orders.some((o) => o.state === 'ready' && o.holdingUid !== null),
+  );
+  check('a plate is waiting somewhere', plated);
+  if (!plated) return;
+
+  const order = game.orders.find((o) => o.state === 'ready' && o.holdingUid !== null)!;
+  const holder = game.placedByUid(order.holdingUid!)!;
+
+  // Stand the whole team down first, so the command is what moves the plate.
+  for (const s of game.data.staff) sim.releaseStaffJob(s);
+  const sent = sim.runPlateOut(holder);
+  check('the command was accepted', sent.ok, sent.message);
+  const runner = game.data.staff.find((s) => s.targetOrderId === order.id);
+  check('a runner picked the order up', !!runner);
+  check('the runner is heading for the plate', runner?.state === 'toKitchen');
+  check('the command named the dish', /burger|fries|salad|soup|omelette|coffee/i.test(sent.message), sent.message);
+
+  const again = sim.runPlateOut(holder);
+  check('a second tap does not double up', !again.ok && /already fetching/i.test(again.message));
+
+  const guest = game.customers.find((c) => c.id === order.customerId)!;
+  check(
+    'the plate reaches the guest',
+    runUntil(sim, () => guest.state !== 'awaitingFood', 120),
+    `guest ended up ${guest.state}`,
+  );
+  check('the guest was not lost', !guest.angry);
+  check('no ghost plates were left behind', noGhostPlates(game));
+});
+
+group('Commands refuse politely when nobody is free', () => {
+  const game = new Game(createNewGame());
+  game.data.open = false;
+  const sim = new Simulation(game);
+  const table = game.placedWithRole('table')[0]!;
+  table.dirty = true;
+  game.touch();
+
+  for (const s of game.data.staff) {
+    s.energy = 0;
+    s.state = 'exhausted';
+  }
+  const flat = sim.cleanTable(table);
+  check('an exhausted team cannot be commanded', !flat.ok, flat.message);
+  check('the refusal points at feeding them', /energy|feed/i.test(flat.message), flat.message);
+  check('the table is still dirty', table.dirty);
+
+  game.data.staff = [];
+  const empty = sim.cleanTable(table);
+  check('an empty payroll points at hiring', /hire/i.test(empty.message), empty.message);
 });
 
 // -------------------------------------------------------------------- dishes
