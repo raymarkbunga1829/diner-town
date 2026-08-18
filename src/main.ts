@@ -24,6 +24,7 @@ import type {
   TextExportOptions,
   TextImportOptions,
 } from './ui/api';
+import { nextCelebration, type CelebrationQueue } from './ui/cards';
 import { el, fmt } from './ui/dom';
 import { iconSvg } from './ui/icons';
 import { createManagePanel } from './ui/panels/manage';
@@ -270,12 +271,24 @@ class App implements AppApi {
     this.save();
   }
 
+  /** What the cards are waiting on this frame. */
+  private celebrations(): CelebrationQueue {
+    return {
+      awayPending: this.awayReport !== null,
+      levelUp: this.game.pendingLevelUp !== null,
+      starUp: this.game.pendingStarUp !== null,
+      dayRecap: this.game.pendingDayRecap !== null,
+      modalOpen: this.ui.hasModal,
+      hold: this.recapHold,
+    };
+  }
+
   private checkLevelUp(): void {
     const level = this.game.pendingLevelUp;
     if (level === null) return;
     // A shift worked while the tab was shut can earn a level, so the celebration
     // waits for that shift's own card rather than landing on top of it.
-    if (this.awayReport || this.ui.hasModal) return;
+    if (nextCelebration(this.celebrations()) !== 'level') return;
     this.game.pendingLevelUp = null;
     audio.play('levelup');
     // Confetti over the room and a warm flash, so the moment lands in the world
@@ -312,7 +325,10 @@ class App implements AppApi {
   private checkStarUp(): void {
     const star = this.game.pendingStarUp;
     if (star === null) return;
-    if (this.awayReport || this.game.pendingLevelUp !== null || this.ui.hasModal) return;
+    // Crossing the cap can earn the last level and a star in one go, and the
+    // level's card is claimed a beat before it appears. Waiting on that beat is
+    // what stops the star card queueing on top of the unlock list.
+    if (nextCelebration(this.celebrations()) !== 'star') return;
     this.game.pendingStarUp = null;
     audio.play('levelup');
     const size = this.game.data.gridSize;
@@ -350,9 +366,7 @@ class App implements AppApi {
     if (!recap) return;
     // Something is already covering the room, or is about to: hold the recap
     // rather than stacking a second card on top of it.
-    if (this.recapHold > 0 || this.ui.hasModal) return;
-    if (this.game.pendingLevelUp !== null || this.game.pendingStarUp !== null) return;
-    if (this.awayReport !== null) return;
+    if (nextCelebration(this.celebrations()) !== 'recap') return;
     this.game.pendingDayRecap = null;
     audio.play('bell');
     this.ui.showDayRecap(recap, (action) => {

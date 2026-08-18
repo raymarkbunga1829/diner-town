@@ -59,6 +59,7 @@ import {
 } from '../src/game/state';
 import type { Order, SaveData, Staff } from '../src/game/types';
 import { buildingBox } from '../src/render/renderer';
+import { nextCelebration } from '../src/ui/cards';
 import {
   coachAction,
   coachBaseline,
@@ -1782,6 +1783,73 @@ group('Past the cap, experience becomes fame', () => {
   check('stars carry on past the rewards', starsForFame(fameForStar(9)) === 9);
   check('fame below the first star is no star at all', starsForFame(fameForStar(1) - 1) === 0);
   check('junk fame is not a star', starsForFame(Number.NaN) === 0 && starsForFame(-5) === 0);
+});
+
+group('A level and a star in one helping are two cards, in that order', () => {
+  const game = new Game(createNewGame());
+  game.data.xp = xpForLevel(MAX_LEVEL) - 40;
+  game.data.level = levelForXp(game.data.xp);
+  check('the diner is one step short of the cap', game.data.level === MAX_LEVEL - 1);
+
+  // A caught-up shift arrives as one lump of experience, and that lump can both
+  // finish the level track and pay for the first star.
+  game.addXp(40 + fameForStar(1));
+  check('the last level was earned', game.data.level === MAX_LEVEL);
+  check('and a star with it', game.stars === 1);
+  check('both cards are claimed', game.pendingLevelUp === MAX_LEVEL && game.pendingStarUp === 1);
+
+  const queue = {
+    awayPending: false,
+    levelUp: game.pendingLevelUp !== null,
+    starUp: game.pendingStarUp !== null,
+    dayRecap: true,
+    modalOpen: false,
+    hold: 0,
+  };
+
+  check('the level card goes first', nextCelebration(queue) === 'level');
+  // The gap this is really about: the level card has been claimed but is not a
+  // modal yet, so nothing but the hold is standing in the star card's way.
+  check(
+    'the star waits out the beat before the level card appears',
+    nextCelebration({ ...queue, levelUp: false, hold: 1.4 }) === null,
+  );
+  // The two gates that were already there and now run through the same helper.
+  check(
+    'nothing lands on top of a card that is up',
+    nextCelebration({ ...queue, levelUp: false, modalOpen: true }) === null,
+  );
+  check(
+    'a missed shift still goes before all of it',
+    nextCelebration({ ...queue, awayPending: true }) === null,
+  );
+
+  // And the frames as they actually run: each card claims the room for a beat,
+  // and the next one only gets its turn once that beat has passed.
+  const shown: Array<{ card: string; frame: number }> = [];
+  let live = { ...queue };
+  for (let frame = 0; frame < 8; frame++) {
+    const card = nextCelebration(live);
+    if (!card) {
+      live = { ...live, hold: Math.max(0, live.hold - 1.4) };
+      continue;
+    }
+    shown.push({ card, frame });
+    live = {
+      ...live,
+      hold: 1.4,
+      levelUp: live.levelUp && card !== 'level',
+      starUp: live.starUp && card !== 'star',
+      dayRecap: live.dayRecap && card !== 'recap',
+    };
+  }
+  const order = shown.map((s) => s.card).join(',');
+  check('the player reads the level, then the star, then the day', order === 'level,star,recap', order);
+  check(
+    'and no two of them are claimed in the same breath',
+    shown.every((s, i) => i === 0 || s.frame > shown[i - 1]!.frame + 1),
+    shown.map((s) => `${s.card}@${s.frame}`).join(' '),
+  );
 });
 
 group('Fame is nowhere near a new diner', () => {
