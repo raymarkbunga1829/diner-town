@@ -928,7 +928,7 @@ class App implements AppApi {
         : 'Your team carried on without you, cooking out of the pantry, and then locked up.',
       report.daysRolled > 0 ? 'A day ended while you were gone, so payroll came out of the till.' : '',
       report.walkouts > 0
-        ? `${report.walkouts} ${report.walkouts === 1 ? 'guest' : 'guests'} gave up waiting with nobody there to seat them.`
+        ? `${report.walkouts} ${report.walkouts === 1 ? 'guest' : 'guests'} gave up waiting while the team was stretched.`
         : '',
       'A shift you work yourself is always worth more than one you miss.',
     ]
