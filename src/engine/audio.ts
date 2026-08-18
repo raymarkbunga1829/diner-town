@@ -4,7 +4,7 @@
  * context is created lazily on the first `unlock()` call.
  */
 
-type SfxName =
+export type SfxName =
   | 'tap'
   | 'coin'
   | 'place'

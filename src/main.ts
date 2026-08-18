@@ -8,7 +8,12 @@ import { FURNITURE_BY_ID, isWallMounted, resaleValue } from './game/data/furnitu
 import { footprint } from './game/grid';
 import { nearestActor } from './game/pick';
 import { unlocksAtLevel } from './game/progression';
-import { Simulation, type CommandResult } from './game/sim';
+import {
+  catchUpWhileAway,
+  Simulation,
+  type CommandResult,
+  type TimeAwayReport,
+} from './game/sim';
 import { createNewGame, Game } from './game/state';
 import type { Customer, Placed } from './game/types';
 import { buildingBox, Renderer, type BuildPreview } from './render/renderer';
@@ -59,9 +64,15 @@ class App implements AppApi {
   /** Milestones the tutorial watches for, e.g. `panel:market`. */
   private readonly seen = new Set<string>();
 
-  constructor(game: Game, uiRoot: HTMLElement, canvas: HTMLCanvasElement) {
+  constructor(
+    game: Game,
+    uiRoot: HTMLElement,
+    canvas: HTMLCanvasElement,
+    away: TimeAwayReport | null = null,
+  ) {
     this.game = game;
     this.sim = new Simulation(game);
+    this.awayReport = away;
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d', { alpha: false })!;
     this.renderer = new Renderer(this.ctx, game, this.sim.grid, this.camera);
@@ -187,6 +198,7 @@ class App implements AppApi {
 
     this.ui.updateStatus();
     this.recapHold = Math.max(0, this.recapHold - dt);
+    this.checkTimeAway(dt);
     this.checkLevelUp();
     this.checkDayRecap();
     this.checkCoach();
@@ -202,6 +214,9 @@ class App implements AppApi {
   private checkLevelUp(): void {
     const level = this.game.pendingLevelUp;
     if (level === null) return;
+    // A shift worked while the tab was shut can earn a level, so the celebration
+    // waits for that shift's own card rather than landing on top of it.
+    if (this.awayReport || this.ui.hasModal) return;
     this.game.pendingLevelUp = null;
     audio.play('levelup');
     // Confetti over the room and a warm flash, so the moment lands in the world
@@ -245,9 +260,10 @@ class App implements AppApi {
   private checkDayRecap(): void {
     const recap = this.game.pendingDayRecap;
     if (!recap) return;
-    // Something is already covering the room: hold the recap rather than
-    // stacking a second card on top of it.
+    // Something is already covering the room, or is about to: hold the recap
+    // rather than stacking a second card on top of it.
     if (this.recapHold > 0 || this.game.pendingLevelUp !== null || this.ui.hasModal) return;
+    if (this.awayReport) return;
     this.game.pendingDayRecap = null;
     audio.play('bell');
     this.ui.showDayRecap(recap, (action) => {
@@ -872,27 +888,54 @@ class App implements AppApi {
     this.game.save();
   }
 
-  /** Award and announce anything the restaurant made while the tab was closed. */
-  reportOfflineEarnings(elapsedSeconds: number): void {
-    const result = this.sim.estimateOfflineEarnings(elapsedSeconds);
-    if (result.coins <= 0) return;
-    this.game.earn(result.coins);
-    this.game.addXp(result.xp);
-    this.game.pendingLevelUp = null;
+  /** The shift worked while the tab was shut, waiting for the boot screen to clear. */
+  private awayReport: TimeAwayReport | null = null;
+  private awayHold = 0.45;
 
-    const hours = Math.floor(result.seconds / 3600);
-    const minutes = Math.round((result.seconds % 3600) / 60);
-    const away = hours ? `${hours}h ${minutes}m` : `${minutes}m`;
-    this.ui.showInfoModal(
-      'While you were away',
-      [
-        { label: 'Time closed', value: away },
-        { label: 'Coins taken', value: fmt(result.coins) },
-        { label: 'Experience', value: fmt(result.xp) },
-      ],
-      'Your team kept the place running without you.',
-      'Collect',
-    );
+  /**
+   * Show what the team did while the tab was shut. The shift itself was worked on
+   * the way in — coins, stock, wages and the clock all moved through the same
+   * code a watched shift moves them through — so this only reports it. Whatever
+   * else it set off, a level or the day's card, queues up behind this one.
+   */
+  private checkTimeAway(dt: number): void {
+    const report = this.awayReport;
+    if (!report) return;
+    this.awayHold -= dt;
+    if (this.awayHold > 0) return;
+    this.awayReport = null;
+
+    const hours = Math.floor(report.awaySeconds / 3600);
+    const minutes = Math.round((report.awaySeconds % 3600) / 60);
+    const lines = [
+      { label: 'Time away', value: hours ? `${hours}h ${minutes}m` : `${minutes}m` },
+      { label: 'Covers served', value: fmt(report.covers) },
+      { label: 'Taken', value: fmt(report.takings) },
+      { label: 'Ingredients used', value: fmt(report.ingredients) },
+    ];
+    if (report.wages > 0) lines.push({ label: 'Wages paid', value: fmt(report.wages) });
+    lines.push({
+      label: 'In the till',
+      value: `${report.coins < 0 ? '-' : '+'}${fmt(Math.abs(report.coins))}`,
+    });
+    if (report.xp > 0) lines.push({ label: 'Experience', value: fmt(report.xp) });
+
+    // The point of the card is the difference between takings and cost, because
+    // that is the part the old "while you were away" bonus quietly left out.
+    const body = [
+      report.pantryRanDry
+        ? 'Your team carried on without you until the pantry ran out, then locked up.'
+        : 'Your team carried on without you, cooking out of the pantry, and then locked up.',
+      report.daysRolled > 0 ? 'A day ended while you were gone, so payroll came out of the till.' : '',
+      report.walkouts > 0
+        ? `${report.walkouts} ${report.walkouts === 1 ? 'guest' : 'guests'} gave up waiting with nobody there to seat them.`
+        : '',
+      'A shift you work yourself is always worth more than one you miss.',
+    ]
+      .filter((s) => s.length > 0)
+      .join(' ');
+
+    this.ui.showInfoModal('While you were away', lines, body, 'Back to work');
     this.save();
   }
 }
@@ -931,17 +974,20 @@ function boot(): void {
 
   const saved = Game.load();
   const game = saved ?? new Game(createNewGame());
-  const elapsed = saved ? (Date.now() - saved.data.savedAt) / 1000 : 0;
 
-  const app = new App(game, uiRoot, canvas);
+  // Work the missed shift before the session starts, so everything that reads
+  // the room on load — the coach's baseline included — sees where it stands now
+  // rather than where it stood when the tab was shut. Saving straight after is
+  // what stops the same stretch of time being paid for twice.
+  const away = saved ? catchUpWhileAway(game, (Date.now() - saved.data.savedAt) / 1000) : null;
+  if (saved) game.save();
+
+  const app = new App(game, uiRoot, canvas, away);
   app.start();
 
   bootScreen?.classList.add('hidden');
   window.setTimeout(() => bootScreen?.remove(), 500);
 
-  if (saved && elapsed > 120) {
-    window.setTimeout(() => app.reportOfflineEarnings(elapsed), 450);
-  }
   if (!saved) {
     game.data.seenIntro = true;
     game.save();

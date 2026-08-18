@@ -30,8 +30,9 @@ whole game is a single static bundle that saves to `localStorage`.
 ### Working the floor
 
 The team runs the room on its own, so the game keeps ticking over while you are
-in a panel or away from the tab. When you do want to intervene, tap what you
-want dealt with — including the marker floating above it:
+in a panel, and works part of a shift for you when you shut the tab. When you do
+want to intervene, tap what you want dealt with — including the marker floating
+above it:
 
 - **A guest at the door** walks to the nearest clean seat. If they cannot sit, the toast says why and rings the table that is in the way.
 - **A dirty table** pulls the nearest free hand over to wipe it, cleaners first, so energy and wages still count.
@@ -63,6 +64,7 @@ standing in for a shift.
 - **Staff.** Waiters, chefs and cleaners each have a skill level you can train and an energy bar that drains as they work. Wages come out of the till at the start of every in-game day.
 - **Regulars.** Eight named guests come back on their own cadence, each hoping for a particular dish drawn from your menu. Serve it to one of them while they are still in a good mood and they tip, hand over experience and return sooner; walk them out and it costs you twice over and they stay away. Manage lists who is due and what they are hoping for.
 - **The day recap.** Crossing into a new day brings up that day's card: covers, walkouts, dish takings, tips, wages owed against wages paid, and the one thing worth doing before tomorrow. Manage keeps the last day's figures next to the lifetime totals.
+- **Time away.** Close the tab and your team works on for a while, then locks up. The card waiting for you shows what that came to and what it cost: covers served, ingredients out of the pantry, wages for any day that ended, and what was actually left in the till. A whole night away is credited with one in-game day, so a shift you play is always worth more than one you skip — and a diner that could not have opened, whether the door was shut, the room had no seats, the kitchen had nobody in it or the pantry was bare, earns nothing at all. Stocking up before you go is what makes a shift away worth having.
 
 ## Running it locally
 
@@ -91,7 +93,9 @@ round-trip, picking a wall panel from a screen position, pathfinding and the
 runs four in-game minutes of the real simulation headlessly to confirm customers
 are actually seated, fed and charged. It also replays the onboarding coach the way
 the buttons drive it, to prove a game that only opens panels cannot finish it and
-one that serves and wipes can.
+one that serves and wipes can, and holds the shift you get for being away against
+twenty minutes of the shift you get for playing, so time away can never be the
+better deal.
 
 ## Publishing this to your own GitHub repo
 
@@ -178,7 +182,8 @@ A few decisions worth knowing about:
 - **No image or audio files.** Every sprite is drawn with canvas paths from a palette on the furniture definition, and every sound effect is synthesised with the Web Audio API. That keeps the repository text-only and the download tiny.
 - **Original 2009-diner look.** The cream, cherry and gold HUD, chibi staff and sunny dining room are original art — a genre homage, not a copy of Playfish or EA assets.
 - **The grid is the source of truth.** `game/grid.ts` indexes placed furniture into solid / flat / wall layers and answers all the spatial questions the simulation asks. Placement is rejected if it would strand part of the floor, which is checked with a flood fill from the doorway.
-- **Persistent versus live state.** `SaveData` holds only what should survive a reload. Customers, orders and floating text are rebuilt each session, so closing the tab simply sends the current diners home. Time away is paid out through a capped offline-earnings estimate rather than by replaying the simulation.
+- **Persistent versus live state.** `SaveData` holds only what should survive a reload. Customers, orders and floating text are rebuilt each session, so closing the tab simply sends the current diners home.
+- **Time away is worked, not estimated.** Rather than guessing what the diner took while the tab was shut, loading a save fast-forwards the real simulation for the shift you missed, so the same code cooks out of your pantry, ends the day and draws payroll. What being away buys is *time*, and not much of it: a full night away is credited with one in-game day, which is the most that can pass without skipping a payroll or burying one day's card under the next. Playing is always worth more than not playing.
 - **Panels are re-rendered, not diffed.** Every panel is a function of current state; a `revision` counter on the game marks state dirty. At this scale it is far simpler than incremental updates and fast enough to be invisible.
 
 ## Licence
