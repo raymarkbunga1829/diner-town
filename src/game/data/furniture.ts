@@ -105,6 +105,12 @@ export const FURNITURE: readonly FurnitureDef[] = [
     description: 'A padded table for four chairs (+14 Style). Still needs chairs around it; tips come from those chairs.',
     palette: P('#7d3b45', '#54242c', '#d8b98c', '#efe0c4'),
   },
+  {
+    id: 'table_chefs', name: "Chef's Table", role: 'table', shape: 'tableMarble',
+    price: 5200, unlockLevel: 20, unlockStars: 6, w: 1, h: 1, ambience: 22, tableCapacity: 4,
+    description: 'A +22 Style top laid for people who booked weeks ago. Still needs chairs around it.',
+    palette: P('#3f4a52', '#28313a', '#d8c9a8', '#c08a3c'),
+  },
 
   // ---------- Chairs ----------
   {
@@ -137,6 +143,12 @@ export const FURNITURE: readonly FurnitureDef[] = [
     description: 'The best seat in the house. Guests settle in and tip like it.',
     palette: P('#2f4a44', '#1c302c', '#5c8a7c', '#e2c27a'),
   },
+  {
+    id: 'chair_banquette', name: 'Banquette Seat', role: 'chair', shape: 'chairThrone',
+    price: 3800, unlockLevel: 20, unlockStars: 9, w: 1, h: 1, ambience: 15, seats: 1, comfort: 1.7,
+    description: 'Deep buttoned leather for the last sitting of the night. The biggest tips in the building come off these.',
+    palette: P('#3a2b3c', '#241a26', '#8a5f7c', '#e0c07a'),
+  },
 
   // ---------- Stoves ----------
   {
@@ -162,6 +174,12 @@ export const FURNITURE: readonly FurnitureDef[] = [
     price: 3600, unlockLevel: 13, w: 1, h: 1, ambience: 8, speed: 2.3,
     description: 'Roaring hot and rather beautiful. The fastest cooker there is.',
     palette: P('#9c6b4b', '#6b452c', '#c79366', '#ff8a3c'),
+  },
+  {
+    id: 'stove_hearth', name: 'Open Hearth', role: 'stove', shape: 'stoveTandoor',
+    price: 8200, unlockLevel: 20, unlockStars: 7, w: 1, h: 1, ambience: 16, speed: 2.6,
+    description: 'A second fire for the second sitting, built where the room can watch it burn.',
+    palette: P('#7d4a2e', '#4d2a17', '#c98a52', '#ff7a2c'),
   },
 
   // ---------- Counters / support ----------
@@ -194,6 +212,12 @@ export const FURNITURE: readonly FurnitureDef[] = [
     price: 1100, unlockLevel: 9, w: 1, h: 1, ambience: 1, speed: 1.7,
     description: 'Cleaners work much faster with real equipment.',
     palette: P('#7f868d', '#565c62', '#b0b7bd', '#8fd0e8'),
+  },
+  {
+    id: 'washer_twin', name: 'Twin Dishwasher', role: 'sink', shape: 'dishwasher',
+    price: 6400, unlockLevel: 20, unlockStars: 8, w: 1, h: 1, ambience: 2, speed: 2.2,
+    description: 'Two drawers running in turn, so a full room never waits on a clean table.',
+    palette: P('#767d84', '#4e545a', '#a8b0b6', '#7fd6c4'),
   },
   {
     id: 'bin_small', name: 'Trash Bin', role: 'bin', shape: 'binSmall',
@@ -300,6 +324,12 @@ export const FURNITURE: readonly FurnitureDef[] = [
     price: 5200, unlockLevel: 20, unlockStars: 3, w: 1, h: 1, ambience: 46,
     description: 'A +46 Style row of framed faces who never stopped coming back.',
     palette: P('#4a3520', '#2d2013', '#d8b072', '#f4ead2'),
+  },
+  {
+    id: 'corner_sign', name: 'Corner Street Sign', role: 'wallDecor', shape: 'neonSign',
+    price: 24000, unlockLevel: 20, unlockStars: 10, w: 1, h: 1, ambience: 130,
+    description: 'A +130 Style copy of the sign the town screwed to your corner, lit up on a wall tile indoors.',
+    palette: P('#26303a', '#161d24', '#f2d27c', '#8fd6ff'),
   },
 ];
 

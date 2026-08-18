@@ -60,7 +60,7 @@ export function fameForStar(star: number): number {
 }
 
 /**
- * Stars are deliberately uncapped: the rewards run out at five, but the number
+ * Stars are deliberately uncapped: the catalogue runs out at ten, but the number
  * carries on so a maxed-out diner still has something that moves.
  */
 export function starsForFame(fame: number): number {
@@ -78,9 +78,12 @@ export function fameProgress(fame: number): { star: number; into: number; span: 
 }
 
 /**
- * What each of the first stars is worth. Recipes, furniture and faces are gated
- * on the catalogue itself — see `unlocksAtStar` — so what lives here is the
- * title the diner earns and the capacity the room is allowed past its cap.
+ * What each of the first ten stars is worth. Recipes, furniture and faces are
+ * gated on the catalogue itself — see `unlocksAtStar` — so what lives here is
+ * the title the diner earns and the capacity the room is allowed past its cap.
+ *
+ * Past the tenth there is nothing left to hand over and the star is only a
+ * score, which is why the list stops rather than thinning out into filler.
  */
 export interface StarReward {
   star: number;
@@ -117,7 +120,34 @@ export const STAR_REWARDS: readonly StarReward[] = [
   {
     star: 5,
     title: 'Diner of the Year',
-    note: 'The bronze goes by the door. After this, stars are simply the score.',
+    note: 'The bronze goes by the door, and the town has only just started looking.',
+  },
+  {
+    star: 6,
+    title: 'Booked to the Weekend',
+    note: 'Nobody gets a table on spec any more. Lay one properly and cook for it.',
+  },
+  {
+    star: 7,
+    title: 'Second Sitting',
+    note: 'The room turns over twice a night, so the board gets another line and the kitchen another fire.',
+    menuSlots: 1,
+  },
+  {
+    star: 8,
+    title: 'Worth the Drive',
+    note: 'People come in off the coast road for one dish. Somewhere to wash up for them, too.',
+  },
+  {
+    star: 9,
+    title: 'Last Orders',
+    note: 'One more pair of hands for the late shift, and somewhere soft for the ones who stay for it.',
+    staffSlots: 1,
+  },
+  {
+    star: 10,
+    title: "The Town's Table",
+    note: 'Your name is on the corner sign. After this, stars are simply the score.',
   },
 ];
 

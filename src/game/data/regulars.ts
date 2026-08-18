@@ -134,6 +134,26 @@ export const REGULARS: readonly RegularDef[] = [
     unlockLevel: 20,
     unlockStars: 4,
   },
+  {
+    id: 'orla',
+    name: 'Orla Fenwick',
+    look: { hair: '#b8523a', hairStyle: 'long', shirt: '#3f6fb5', pants: '#2f3a4a' },
+    tastes: ['ocean_board', 'salmon_sushi', 'fish_and_chips'],
+    cadenceDays: 3,
+    note: 'Drives the coast road on her day off to find out whether you can beat the sea.',
+    unlockLevel: 20,
+    unlockStars: 8,
+  },
+  {
+    id: 'gus',
+    name: 'Gus Amankwah',
+    look: { hair: '#241d19', hairStyle: 'short', shirt: '#7a4f8c', pants: '#3a3f4a' },
+    tastes: ['nightcap_affogato', 'mocha_torte', 'iced_coffee'],
+    cadenceDays: 4,
+    note: 'Locks up the picture house across the road and walks in for the last order of the night.',
+    unlockLevel: 20,
+    unlockStars: 9,
+  },
 ];
 
 export const REGULARS_BY_ID: Record<string, RegularDef> = Object.fromEntries(

@@ -87,11 +87,17 @@ export const DISHES: readonly Dish[] = [
   { id: 'feast_board', name: 'House Feast Board', category: 'main', recipe: { beef: 2, shrimp: 2, chicken: 2, bread: 2, spice: 2 }, basePrice: 162, cookTime: 28, unlockLevel: 20, appeal: 0.93, plate: 'plate', color: '#c98b4a', accent: '#7a4620' },
 
   // ---- Fame stars ----
-  // Past the level cap there is nowhere left to climb, so the last recipe is
-  // bought with fame instead.
+  // Past the level cap there is nowhere left to climb, so these are bought with
+  // fame instead. They keep to the same slow, expensive shape as the rest of the
+  // late menu, so a famous kitchen cooks better food rather than faster money.
   // Level 20 here is the level cap; `progression` owns that number and the
   // checks hold these two together.
   { id: 'kitchen_table', name: 'Kitchen Table Supper', category: 'main', recipe: { beef: 2, mushroom: 2, potato: 2, butter: 2, spice: 1 }, basePrice: 160, cookTime: 30, unlockLevel: 20, unlockStars: 1, appeal: 0.95, plate: 'plate', color: '#a5522f', accent: '#632c17' },
+  { id: 'sunday_roast', name: 'Slow Sunday Roast', category: 'main', recipe: { chicken: 3, potato: 3, onion: 2, butter: 2 }, basePrice: 138, cookTime: 26, unlockLevel: 20, unlockStars: 6, appeal: 0.9, plate: 'plate', color: '#b9743a', accent: '#7a441c' },
+  { id: 'ember_skewers', name: 'Ember Skewers', category: 'main', recipe: { beef: 2, pork: 1, spice: 2, onion: 2, bread: 1 }, basePrice: 134, cookTime: 24, unlockLevel: 20, unlockStars: 7, appeal: 0.91, plate: 'skewer', color: '#b45a2c', accent: '#6f2f13' },
+  { id: 'ocean_board', name: 'Ocean Board', category: 'main', recipe: { fish: 2, shrimp: 2, rice: 2, seaweed: 2 }, basePrice: 152, cookTime: 26, unlockLevel: 20, unlockStars: 8, appeal: 0.92, plate: 'sushi', color: '#f0f3ec', accent: '#4f8fa8' },
+  { id: 'nightcap_affogato', name: 'Nightcap Affogato', category: 'drink', recipe: { coffee: 3, chocolate: 2, milk: 2, sugar: 2 }, basePrice: 122, cookTime: 22, unlockLevel: 20, unlockStars: 9, appeal: 0.89, plate: 'cup', color: '#3a2418', accent: '#e8d8b8' },
+  { id: 'town_tasting', name: 'Town Tasting Menu', category: 'main', recipe: { beef: 2, shrimp: 2, fish: 1, mushroom: 2, chocolate: 1, spice: 2 }, basePrice: 175, cookTime: 30, unlockLevel: 20, unlockStars: 10, appeal: 0.97, plate: 'plate', color: '#8f4a3c', accent: '#4f2118' },
 ];
 
 export const DISHES_BY_ID: Record<string, Dish> = Object.fromEntries(
