@@ -1299,8 +1299,8 @@ function drawUniformHat(f: Figure, role: 'waiter' | 'chef' | 'cleaner', head: Li
       // Peaked cap: the bill is drawn first so the crown laps over its root.
       limb(
         f,
-        { u: head.u, v: head.v + 0.29, y: crown - 0.06, w: 0.42, d: 0.18, h: 0.035 },
-        faces('#a82f26'),
+        { u: head.u, v: head.v + 0.3, y: crown - 0.06, w: 0.44, d: 0.2, h: 0.045 },
+        faces('#a12b23'),
       );
       const cap: Limb = { u: head.u, v: head.v, y: crown - 0.07, w: 0.5, d: 0.4, h: 0.16 };
       limb(f, cap, faces('#c73a2e'));
@@ -1355,17 +1355,18 @@ function drawGuestExtra(f: Figure, look: Appearance, head: Limb, hip: number, le
     f.ctx.arc(at.x, at.y - (0.12 * f.s * TILE_Z + 2.2 * f.s), 2.6 * f.s, 0, Math.PI * 2);
     f.ctx.fill();
   } else if (pick === 1) {
-    // Scarf, round the neck with the tail hanging down the front.
+    // Scarf, round the neck with the tail hanging down the front. Darker than the
+    // shirt it is picked from, or the two would read as one garment.
     limb(
       f,
       { u: head.u, v: head.v, y: hip + 0.32, w: 0.36, d: 0.3, h: 0.11 },
-      faces(shade(look.shirt, 0.72)),
+      faces(shade(look.shirt, 0.58)),
     );
     if (f.front) {
       limb(
         f,
         { u: head.u + 0.06, v: lean + 0.15, y: hip + 0.08, w: 0.1, d: 0.06, h: 0.24 },
-        faces(shade(look.shirt, 0.66)),
+        faces(shade(look.shirt, 0.52)),
       );
     }
   }
@@ -1392,8 +1393,10 @@ function drawHairBack(f: Figure, look: Appearance, head: Limb): void {
       faces(look.hair),
     );
   } else if (look.hairStyle === 'bun') {
-    const at = spot(f, head.u, head.v - 0.19, crown - 0.14);
-    isoCylinder(f.ctx, at.x, at.y, 0.14 * f.s, 0.15 * f.s, look.hair);
+    // High enough on the back of the head to break the crown line, or a bun would
+    // be a style you could only tell somebody had from behind.
+    const at = spot(f, head.u, head.v - 0.16, crown - 0.04);
+    isoCylinder(f.ctx, at.x, at.y, 0.14 * f.s, 0.16 * f.s, look.hair);
   }
 }
 
