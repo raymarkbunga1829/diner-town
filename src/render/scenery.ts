@@ -10,14 +10,18 @@
 
 import { TILE_H, TILE_W, TILE_Z } from '../engine/iso';
 import {
+  diamondCorners,
   diamondPath,
   faces,
   isoBox,
   isoCylinder,
+  isoSides,
   mix,
   roundRect,
   shade,
   withAlpha,
+  type BoxColors,
+  type Corner,
 } from './shapes';
 
 export interface Point {
@@ -59,6 +63,34 @@ function alpha(base: string, a: number): string {
   if (hit === undefined) {
     hit = withAlpha(base, a);
     alphaCache.set(key, hit);
+  }
+  return hit;
+}
+
+/**
+ * The same treatment for `mix` and `faces`, which the street asks for hardest:
+ * a storey of windows wants a lit tone and an unlit one, and each of them is a
+ * blend that changes only as slowly as the evening does. Two decimal places of
+ * the blend is finer than the eye, and both palettes are fixed, so the keys
+ * stop multiplying.
+ */
+const blendCache = new Map<string, string>();
+function blend(a: string, b: string, t: number): string {
+  const key = `${a}|${b}|${t.toFixed(2)}`;
+  let hit = blendCache.get(key);
+  if (hit === undefined) {
+    hit = mix(a, b, t);
+    blendCache.set(key, hit);
+  }
+  return hit;
+}
+
+const faceCache = new Map<string, BoxColors>();
+function facesOf(base: string): BoxColors {
+  let hit = faceCache.get(base);
+  if (hit === undefined) {
+    hit = faces(base);
+    faceCache.set(base, hit);
   }
   return hit;
 }
@@ -726,153 +758,1027 @@ export function drawTree(
   ctx.fill();
 }
 
+// ------------------------------------------------------- street architecture
+
 /**
- * Set up a drawing plane on one of a box's two camera-facing walls, so a facade
- * can be laid out as if on flat paper: local x runs along the wall from the near
- * corner, local y runs down the screen. Returns the wall's width in local units.
- * The caller owns the surrounding save/restore.
+ * Where a horizontal plane `level` tile-heights above a footprint centre lands
+ * on screen.
+ *
+ * Every piece of a street building — each storey, the roof, the gear standing on
+ * it — is positioned from the footprint centre plus a level, never from a
+ * separately derived copy of either, and no horizontal plate is ever drawn wider
+ * than the walls it caps. Those two rules are the whole of what keeps a roof on
+ * its building; {@link roofSeam} hands both sides of the seam to the headless
+ * checks so they cannot quietly drift apart again.
  */
-function facadePlane(
-  ctx: CanvasRenderingContext2D,
-  cx: number,
-  cy: number,
-  span: number,
-  side: 'left' | 'right',
-): number {
-  // Both visible walls meet at the near (south) corner of the footprint.
-  const nearY = cy + (TILE_H / 2) * span;
-  const dir = side === 'right' ? 1 : -1;
-  ctx.transform(dir, -0.5, 0, 1, cx, nearY);
-  return (TILE_W / 2) * span;
+export function planeOrigin(cx: number, cy: number, level: number): Point {
+  return { x: cx, y: cy - level * TILE_Z };
 }
 
-const SHOP_WALLS = ['#e8a9a2', '#9fc4de', '#f0cf95', '#aed49b', '#c9aede', '#efb27f'] as const;
-const AWNINGS = ['#c9503f', '#2f7f9e', '#e0952c', '#4b8d55', '#8a5aa8'] as const;
+/** What a street building is made of. Deliberately not a row of pastels. */
+interface BuildingStyle {
+  wall: string;
+  /** Mouldings, sills, stallrisers, glazing bars. */
+  trim: string;
+  /** Awnings, doors, signs: the one colour allowed to shout. */
+  accent: string;
+  /** Course lines across the wall, as brick and stone have and render does not. */
+  courses: boolean;
+}
+
+const STYLES: readonly BuildingStyle[] = [
+  { wall: '#b4614a', trim: '#f6e8d2', accent: '#2f6b76', courses: true },
+  { wall: '#9c554c', trim: '#eedcc0', accent: '#e0b048', courses: true },
+  { wall: '#e0cba2', trim: '#fffaf0', accent: '#c04a35', courses: false },
+  { wall: '#a4c4b0', trim: '#fdf6e4', accent: '#d8813a', courses: false },
+  { wall: '#82909f', trim: '#eef2f6', accent: '#e4b84c', courses: true },
+  { wall: '#cf9a4e', trim: '#fff3d8', accent: '#375563', courses: false },
+  { wall: '#8a6a84', trim: '#f6e8ef', accent: '#e8a63f', courses: false },
+  { wall: '#9ca36c', trim: '#fbf4dd', accent: '#a94b39', courses: false },
+  { wall: '#c8b9a6', trim: '#fffdf5', accent: '#7a4a6e', courses: true },
+];
+
+const AWNINGS = [
+  '#c0483a',
+  '#2c6f8c',
+  '#d9942a',
+  '#3f7d4c',
+  '#7c4f95',
+  '#b8354f',
+  '#2f5f7a',
+] as const;
+
+/** Roof deck surfaces: felt, gravel, lead. */
+const DECKS = ['#8d8778', '#9a9081', '#7f8a8c', '#a09681'] as const;
+
+/** One storey of a street building. */
+export interface Storey {
+  /** Level of its floor and of its ceiling, in tile-height units. */
+  base: number;
+  top: number;
+  /** Footprint along the two grid axes, in tiles. */
+  sx: number;
+  sy: number;
+}
+
+export interface RoofPlan {
+  kind: 'deck' | 'gable';
+  /** The plane the roof sits on. Always the top of the storey beneath it. */
+  level: number;
+  /**
+   * Roof footprint. Never larger than that storey's: a lid that oversails its
+   * walls is exactly what makes a roof look like it slid off the building.
+   */
+  sx: number;
+  sy: number;
+  /** Parapet wall standing on the edge of a deck roof. */
+  parapet: number;
+  /** How far a gable's ridge rises above its eaves, and the axis it runs along. */
+  rise: number;
+  ridge: 'x' | 'y';
+  /** A raised parapet section carrying a painted name board, main-street style. */
+  crown: boolean;
+}
+
+export interface RoofGear {
+  kind: 'tank' | 'condenser' | 'vent' | 'stair' | 'chimney' | 'planter' | 'billboard';
+  /** Offset from the footprint centre along the grid axes, in tiles. */
+  dx: number;
+  dy: number;
+  /** Footprint, in tiles, and height in tile-height units. */
+  sx: number;
+  sy: number;
+  h: number;
+}
+
+export interface BuildingPlan {
+  /** Ground floor first. Each storey stands on the one below it. */
+  storeys: Storey[];
+  roof: RoofPlan;
+  gear: RoofGear[];
+  style: BuildingStyle;
+  awning: string;
+  deck: string;
+  /** Which camera-facing wall carries the shopfront; the other is the flank. */
+  front: 'left' | 'right';
+  /** 0 none, 1 a straight valance, 2 a scalloped one. */
+  valance: 0 | 1 | 2;
+  /** A name board over the shopfront. */
+  sign: boolean;
+  seed: number;
+}
+
+/** Stable pseudo-random draw `k` for a building. */
+const roll = (seed: number, k: number): number =>
+  tileNoise(Math.round(seed * 3 + k * 101), Math.round(seed - k * 37 + 11));
+
+const pick = <T>(items: readonly T[], at: number): T =>
+  items[Math.floor(at * items.length) % items.length]!;
 
 /**
- * A neighbouring shopfront: glazed ground floor under a striped awning, windows
- * upstairs that light up after dark, and something on the roof. These fill the
- * streetscape around the restaurant, so they have to read as buildings at a
- * glance from a long way off.
+ * Design a building for a plot.
+ *
+ * Footprint and height come from the plot; how many storeys it splits into,
+ * whether the top steps back, what the roof does and what stands on it all come
+ * from the seed. That is what makes a run of eight plots eight different
+ * buildings rather than eight tinted copies of one crate.
+ */
+export function planStreetBuilding(
+  spanX: number,
+  spanY: number,
+  height: number,
+  seed: number,
+): BuildingPlan {
+  const storeys: Storey[] = [];
+  // A trading floor is taller than the flats above it, and needs the headroom
+  // for an awning and a name board.
+  const shopH = Math.min(height * 0.62, 1.3 + roll(seed, 2) * 0.4);
+  const above = height - shopH;
+
+  if (above < 0.55) {
+    storeys.push({ base: 0, top: height, sx: spanX, sy: spanY });
+  } else if (above > 1.8 && roll(seed, 3) > 0.5) {
+    // Tall buildings step back at the top, which gives the skyline a shoulder
+    // instead of one more flat-topped slab.
+    const shoulder = shopH + above * (0.54 + roll(seed, 4) * 0.22);
+    const inset = Math.min(0.85, Math.min(spanX, spanY) * 0.26);
+    storeys.push({ base: 0, top: shopH, sx: spanX, sy: spanY });
+    storeys.push({ base: shopH, top: shoulder, sx: spanX, sy: spanY });
+    storeys.push({ base: shoulder, top: height, sx: spanX - inset, sy: spanY - inset });
+  } else {
+    storeys.push({ base: 0, top: shopH, sx: spanX, sy: spanY });
+    storeys.push({ base: shopH, top: height, sx: spanX, sy: spanY });
+  }
+
+  const cap = storeys[storeys.length - 1]!;
+  const gabled = height < 3.4 && roll(seed, 5) > 0.52;
+  const roof: RoofPlan = {
+    kind: gabled ? 'gable' : 'deck',
+    level: cap.top,
+    // The roof is the top storey's own footprint. Not a scaled copy of it.
+    sx: cap.sx,
+    sy: cap.sy,
+    parapet: gabled ? 0 : 0.14 + roll(seed, 6) * 0.2,
+    rise: gabled ? 0.4 + roll(seed, 7) * 0.36 : 0,
+    ridge: cap.sx >= cap.sy ? 'x' : 'y',
+    crown: !gabled && storeys.length < 3 && roll(seed, 8) > 0.48,
+  };
+
+  // The wider elevation gets the shopfront, so frontages face along the street.
+  // Where the plot is square there is nothing to choose between them, so the
+  // seed picks.
+  const front: 'left' | 'right' =
+    Math.abs(spanX - spanY) < 0.4
+      ? roll(seed, 10) > 0.5
+        ? 'right'
+        : 'left'
+      : spanX > spanY
+        ? 'left'
+        : 'right';
+
+  return {
+    storeys,
+    roof,
+    gear: planRoofGear(roof, seed),
+    style: pick(STYLES, roll(seed, 1)),
+    awning: pick(AWNINGS, roll(seed, 9)),
+    deck: pick(DECKS, roll(seed, 14)),
+    front,
+    valance: roll(seed, 11) < 0.22 ? 0 : roll(seed, 12) > 0.45 ? 2 : 1,
+    sign: roll(seed, 13) > 0.18,
+    seed,
+  };
+}
+
+/**
+ * What stands on the roof. Positions are tile offsets from the footprint centre
+ * and every one is pulled back inside the roof before it is returned, because a
+ * vent hanging off the edge of the parapet is the same bug as a roof hanging off
+ * the walls, just smaller.
+ */
+function planRoofGear(roof: RoofPlan, seed: number): RoofGear[] {
+  if (roof.kind === 'gable') {
+    // A chimney on the ridge, and nothing else: a pitched roof has nowhere flat
+    // to stand a water tank.
+    const along = roof.ridge === 'x' ? roof.sx : roof.sy;
+    const at = (roll(seed, 20) - 0.5) * along * 0.5;
+    return [
+      fitGear(roof, {
+        kind: 'chimney',
+        dx: roof.ridge === 'x' ? at : 0,
+        dy: roof.ridge === 'x' ? 0 : at,
+        sx: 0.34,
+        sy: 0.34,
+        h: 0.5 + roll(seed, 21) * 0.32,
+      }),
+    ];
+  }
+
+  const kinds = ['tank', 'condenser', 'vent', 'stair', 'planter', 'billboard'] as const;
+  const want = 1 + Math.floor(roll(seed, 22) * 3);
+  const out: RoofGear[] = [];
+  for (let i = 0; i < want; i++) {
+    const kind = pick(kinds, roll(seed, 23 + i * 4));
+    // Spread them across opposite quarters of the deck rather than piling them
+    // all on the middle of it.
+    const dx = (roll(seed, 24 + i * 4) - 0.5) * roof.sx * 0.34 + (i % 2 ? 1 : -1) * roof.sx * 0.17;
+    const dy = (roll(seed, 25 + i * 4) - 0.5) * roof.sy * 0.34 + (i < 2 ? -1 : 1) * roof.sy * 0.15;
+    out.push(
+      fitGear(roof, {
+        kind,
+        dx,
+        dy,
+        sx: Math.min(kind === 'billboard' ? 1.1 : kind === 'stair' ? 0.72 : 0.54, roof.sx * 0.44),
+        sy: Math.min(kind === 'billboard' ? 0.22 : kind === 'stair' ? 0.72 : 0.54, roof.sy * 0.44),
+        h:
+          kind === 'vent'
+            ? 0.18
+            : kind === 'tank'
+              ? 0.62
+              : kind === 'billboard'
+                ? 0.8
+                : kind === 'planter'
+                  ? 0.22
+                  : 0.34,
+      }),
+    );
+  }
+  return out;
+}
+
+/** Pull a piece of gear back until it stands entirely on the roof. */
+function fitGear(roof: RoofPlan, gear: RoofGear): RoofGear {
+  // The parapet takes a slice off each edge, so the standable deck is a little
+  // smaller than the roof that carries it.
+  const margin = 0.18;
+  const limX = Math.max(0, (roof.sx - gear.sx) / 2 - margin);
+  const limY = Math.max(0, (roof.sy - gear.sy) / 2 - margin);
+  return {
+    ...gear,
+    dx: clampTo(gear.dx, limX),
+    dy: clampTo(gear.dy, limY),
+  };
+}
+
+const clampTo = (v: number, lim: number): number => (v < -lim ? -lim : v > lim ? lim : v);
+
+/**
+ * The roof plane and the top of the walls under it, worked out independently
+ * from the plan. They have to agree: a roof is not a separate object that
+ * happens to be parked near a building. The headless checks compare them, along
+ * with the two footprints, for every shape of building the town can generate.
+ */
+export function roofSeam(
+  cx: number,
+  cy: number,
+  plan: BuildingPlan,
+): { walls: Point; roof: Point; wallFoot: [number, number]; roofFoot: [number, number] } {
+  const cap = plan.storeys[plan.storeys.length - 1]!;
+  return {
+    walls: planeOrigin(cx, cy, cap.top),
+    roof: planeOrigin(cx, cy, plan.roof.level),
+    wallFoot: [cap.sx, cap.sy],
+    roofFoot: [plan.roof.sx, plan.roof.sy],
+  };
+}
+
+/**
+ * A neighbouring building: a glazed trading floor under an awning, storeys of
+ * windows that light up after dark, and a roof that sits on top of them. These
+ * fill the streetscape around the restaurant, so they have to read as buildings
+ * at a glance from a long way off.
  */
 export function drawShopBlock(
   ctx: CanvasRenderingContext2D,
   cx: number,
   cy: number,
-  span: number,
+  spanX: number,
+  spanY: number,
   height: number,
   seed: number,
   night = 0,
+  /**
+   * Camera zoom, used only to decide how much detail is worth drawing. Zoomed
+   * out to survey the town there are a couple of hundred buildings on screen and
+   * a window pane is a few pixels across, so the glazing bars, course lines,
+   * shutters and felt seams cost real frame time and buy nothing.
+   */
+  zoom = 1,
 ): void {
-  const n = tileNoise(seed, seed + 3);
-  const wall = SHOP_WALLS[Math.floor(n * SHOP_WALLS.length) % SHOP_WALLS.length]!;
-  const awning = AWNINGS[Math.floor(tileNoise(seed + 7, seed) * AWNINGS.length) % AWNINGS.length]!;
-  const shopH = 0.62;
-  const canopyH = shopH + 0.06;
+  const plan = planStreetBuilding(spanX, spanY, height, seed);
+  const { style } = plan;
+  const ground = plan.storeys[0]!;
+  const fine = zoom > 0.72;
 
-  ctx.fillStyle = alpha('#281c16', 0.2);
+  // Contact shadow, sized to the footprint it belongs to.
+  const reach = (ground.sx + ground.sy) / 2;
+  ctx.fillStyle = alpha('#281c16', 0.22);
   ctx.beginPath();
-  ctx.ellipse(cx + 6, cy + 4, TILE_W * span * 0.34, TILE_H * span * 0.34, 0, 0, Math.PI * 2);
+  ctx.ellipse(cx + 6, cy + 4, TILE_W * reach * 0.36, TILE_H * reach * 0.36, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  // Upper storeys, then the glazed ground floor set into them.
-  isoBox(ctx, cx, cy, span, span, height, faces(wall));
-  isoBox(ctx, cx, cy, span, span, shopH, faces('#54646f'));
+  plan.storeys.forEach((s, i) => {
+    // Storey walls only. No lid: the storey above, or the roof, closes the top,
+    // and a lid drawn here would land across the facade below.
+    const wall = i === 0 ? style.wall : shade(style.wall, 1.03 - i * 0.05);
+    isoSides(ctx, cx, cy, s.sx, s.sy, s.top - s.base, facesOf(wall), s.base);
 
-  for (const side of ['left', 'right'] as const) {
-    ctx.save();
-    const w = facadePlane(ctx, cx, cy, span, side);
-    const lit = side === 'right' ? 1 : 0.84;
-    // Colours are hoisted out of the loops below: a street of shops is drawn every
-    // frame, so anything that builds a colour string per window shows up on a phone.
-    const reveal = tone(wall, lit * 0.72);
-    const glassOff = mix(tone('#8fa9bb', lit), '#ffdf9e', night * 0.12);
-    const glassOn = mix(tone('#8fa9bb', lit), '#ffdf9e', night);
-    const bandA = tone(awning, lit);
-    const bandB = tone('#fff2dc', lit);
+    for (const side of ['right', 'left'] as const) {
+      ctx.save();
+      const w = storeyPlane(ctx, cx, cy, s, side);
+      const h = (s.top - s.base) * TILE_Z;
+      const lit = side === 'right' ? 1 : 0.84;
+      const front = side === plan.front;
+      if (i === 0) {
+        if (front) drawShopElevation(ctx, w, h, plan, lit, night, fine);
+        else drawFlankElevation(ctx, w, h, plan, lit, night);
+      } else {
+        drawUpperElevation(ctx, w, h, plan, lit, night, i, fine);
+      }
+      ctx.restore();
+    }
 
-    // Shopfront: a door and a wide pane, with warm light spilling out at night.
-    ctx.fillStyle = mix(tone('#9fb6c2', lit), '#ffd89a', night * 0.85);
-    ctx.fillRect(w * 0.08, -shopH * TILE_Z + 3, w * 0.5, shopH * TILE_Z - 6);
-    ctx.fillStyle = tone('#6f4a33', lit);
-    ctx.fillRect(w * 0.66, -shopH * TILE_Z + 3, w * 0.2, shopH * TILE_Z - 3);
-    ctx.fillStyle = alpha('#ffffff', 0.16);
-    ctx.fillRect(w * 0.08, -shopH * TILE_Z + 3, w * 0.5, 3);
+    // Where the storey above steps back, what is left of this storey's ceiling
+    // is a terrace. It is this storey's own lid, at this storey's own top.
+    const up = plan.storeys[i + 1];
+    if (up && (up.sx < s.sx - 1e-6 || up.sy < s.sy - 1e-6)) {
+      const o = planeOrigin(cx, cy, s.top);
+      diamondPath(ctx, o.x, o.y, s.sx, s.sy);
+      ctx.fillStyle = tone(plan.deck, 1.04);
+      ctx.fill();
+      ctx.strokeStyle = alpha(style.trim, 0.7);
+      ctx.lineWidth = 2;
+      diamondPath(ctx, o.x, o.y - 3, s.sx * 0.98, s.sy * 0.98);
+      ctx.stroke();
+    }
+  });
 
-    // Striped valance hanging off the canopy above the shopfront. Each colour is
-    // one path, so the whole valance costs two fills however many stripes it has.
-    const vy = -canopyH * TILE_Z;
-    const bands = Math.max(3, Math.round(w / 11));
-    const bandW = (w * 0.96) / bands;
+  drawRoof(ctx, cx, cy, plan, night, fine);
+}
+
+/**
+ * Set up a drawing plane on one of a storey's two camera-facing walls, so an
+ * elevation can be laid out as if on flat paper: local x runs along the wall
+ * from the near corner, local y runs down the screen from the storey's floor
+ * line. Returns the wall's width in local units.
+ *
+ * Taking the plane from the storey means a set-back upper floor is drawn in the
+ * plane of its own walls rather than in the plane of the walls below it. The
+ * caller owns the surrounding save/restore.
+ */
+function storeyPlane(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  s: Storey,
+  side: 'left' | 'right',
+): number {
+  // Both visible walls meet at the near (south) corner of the footprint.
+  const near = diamondCorners(cx, cy, s.sx, s.sy, s.base).s;
+  const dir = side === 'right' ? 1 : -1;
+  ctx.transform(dir, -0.5, 0, 1, near.x, near.y);
+  // The right-hand wall runs along the y axis of the footprint, the left-hand
+  // one along the x axis.
+  return (TILE_W / 2) * (side === 'right' ? s.sy : s.sx);
+}
+
+/** How a shopfront divides up its wall, in local pixels down from the ceiling. */
+function shopLayout(h: number): { sign: number; signH: number; glass: number; riser: number } {
+  const signH = Math.min(h * 0.22, 11);
+  return {
+    sign: -h + 2,
+    signH,
+    glass: -h + 4 + signH,
+    riser: Math.min(h * 0.2, 10),
+  };
+}
+
+/**
+ * The trading floor, on the wall that faces the street: a stallriser, a glazed
+ * bay, a door, an awning over them and a painted name board above.
+ */
+function drawShopElevation(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  plan: BuildingPlan,
+  lit: number,
+  night: number,
+  fine: boolean,
+): void {
+  const { style } = plan;
+  const trim = tone(style.trim, lit);
+  const { sign, signH, glass, riser } = shopLayout(h);
+  const pad = Math.max(3, w * 0.05);
+  const glassTone = blend(tone('#8fa9bb', lit), '#ffd89a', 0.1 + night * 0.78);
+
+  // Stallriser: the solid base a shopfront stands on. Without it the glazing
+  // reads as a hole cut down to the pavement.
+  ctx.fillStyle = tone(style.accent, lit * 0.68);
+  ctx.fillRect(pad * 0.5, -riser, w - pad, riser);
+  ctx.fillStyle = trim;
+  ctx.fillRect(pad * 0.5, -riser - 2.2, w - pad, 2.2);
+
+  const doorW = Math.min(Math.max(w * 0.19, 9), 22);
+  const paneW = Math.max(8, w - pad * 2 - doorW - 3);
+
+  ctx.fillStyle = glassTone;
+  ctx.fillRect(pad, glass, paneW, -glass - riser);
+
+  // Glazing bars and the frame, batched into one path: a street of shops is
+  // drawn every frame, so a fill per bar shows up on a phone.
+  ctx.fillStyle = trim;
+  ctx.beginPath();
+  if (fine) {
+    const bays = Math.max(1, Math.round(paneW / 22));
+    for (let i = 1; i < bays; i++) ctx.rect(pad + (paneW / bays) * i - 1, glass, 2, -glass - riser);
+  }
+  ctx.rect(pad, glass, paneW, 2.4);
+  ctx.rect(pad - 1.6, glass - 1.8, paneW + 3.2, 1.8);
+  ctx.fill();
+  if (fine) {
+    ctx.fillStyle = alpha('#ffffff', 0.15);
+    ctx.fillRect(pad + 2, glass + 3, paneW * 0.44, (-glass - riser) * 0.32);
+  }
+
+  // Door, with a fanlight over it and a handle.
+  const doorX = w - pad - doorW;
+  const doorTop = glass + 1.5;
+  ctx.fillStyle = tone(style.accent, lit * 0.92);
+  ctx.fillRect(doorX, doorTop, doorW, -doorTop);
+  ctx.fillStyle = blend(tone('#8fa9bb', lit), '#ffe0a8', 0.14 + night * 0.74);
+  ctx.fillRect(doorX + 2.4, doorTop + 2.5, doorW - 4.8, -doorTop * 0.44);
+  ctx.fillStyle = trim;
+  ctx.beginPath();
+  ctx.rect(doorX - 1.4, doorTop - 1.8, doorW + 2.8, 1.8);
+  if (fine) ctx.rect(doorX + doorW - 4.2, -h * 0.22, 1.6, 4.2);
+  ctx.fill();
+
+  if (plan.valance) drawValance(ctx, pad - 2.5, glass - 1, paneW + 5, plan, lit, fine);
+  if (plan.sign) {
+    drawNameBoard(ctx, pad - 2.5, sign, w - pad * 2 + 5, signH, plan, lit, night, fine);
+  }
+}
+
+/**
+ * The other camera-facing wall of the trading floor. Giving it a flank rather
+ * than a second shopfront is most of what stops a building looking like a
+ * mirrored cardboard cut-out.
+ */
+function drawFlankElevation(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  plan: BuildingPlan,
+  lit: number,
+  night: number,
+): void {
+  const { style } = plan;
+  const { riser } = shopLayout(h);
+
+  ctx.fillStyle = tone(style.accent, lit * 0.6);
+  ctx.fillRect(0, -riser, w, riser);
+  ctx.fillStyle = tone(style.trim, lit * 0.9);
+  ctx.fillRect(0, -riser - 1.8, w, 1.8);
+
+  // A service door at one end, high windows along the rest, and a downpipe.
+  const doorW = Math.min(Math.max(w * 0.16, 8), 18);
+  ctx.fillStyle = tone(style.wall, lit * 0.6);
+  ctx.fillRect(w * 0.08, -h * 0.62, doorW, h * 0.62);
+  ctx.fillStyle = tone(style.trim, lit * 0.82);
+  ctx.fillRect(w * 0.08, -h * 0.62, doorW, 1.8);
+
+  const panes = Math.max(1, Math.floor((w - doorW - w * 0.2) / 20));
+  const paneW = Math.min(14, (w - doorW - w * 0.24) / panes - 4);
+  if (paneW > 4) {
+    ctx.fillStyle = blend(tone('#7f97a6', lit), '#ffd89a', night * 0.5);
+    ctx.beginPath();
+    for (let i = 0; i < panes; i++) {
+      ctx.rect(w * 0.1 + doorW + 6 + i * (paneW + 6), -h * 0.72, paneW, h * 0.24);
+    }
+    ctx.fill();
+  }
+
+  ctx.fillStyle = tone(style.trim, lit * 0.7);
+  ctx.fillRect(w - 4.5, -h, 2.6, h);
+}
+
+/**
+ * A residential storey: course lines if the wall is brick or stone, a grid of
+ * windows with sills, and shutters on some of them. Panes light up unevenly
+ * after dark, which is what makes the street look inhabited rather than switched
+ * off.
+ */
+function drawUpperElevation(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  plan: BuildingPlan,
+  lit: number,
+  night: number,
+  storey: number,
+  fine: boolean,
+): void {
+  const { style, seed } = plan;
+
+  if (style.courses && fine) {
+    ctx.fillStyle = alpha(shade(style.wall, 0.82), 0.5);
+    ctx.beginPath();
+    for (let y = -6; y > -h + 3; y -= 9) ctx.rect(0, y, w, 1.1);
+    ctx.fill();
+  }
+  // A string course marking the floor line, which is what breaks a tall wall up
+  // into storeys from a distance.
+  ctx.fillStyle = tone(style.trim, lit * 0.94);
+  ctx.fillRect(0, -3.2, w, 3.2);
+
+  const rows = Math.max(1, Math.min(3, Math.round(h / 30)));
+  const cols = Math.max(1, Math.min(5, Math.round(w / 24)));
+  const cell = w / cols;
+  const paneW = Math.min(cell * 0.52, 15);
+  const paneH = Math.min((h / rows) * 0.52, 17);
+  const shutters = fine && roll(seed, 30 + storey) > 0.62 && paneW > 7;
+
+  // Reveals, sills, dark panes and lit panes are each one path for the same
+  // reason the glazing bars are.
+  const reveal = tone(style.wall, lit * 0.66);
+  const sill = tone(style.trim, lit);
+  const off = blend(tone('#7d94a4', lit), '#ffdf9e', night * 0.14);
+  const on = blend(tone('#7d94a4', lit), '#ffe2a4', 0.1 + night * 0.86);
+  const bars: Array<[number, number]> = [];
+  const litPanes: Array<[number, number]> = [];
+  const darkPanes: Array<[number, number]> = [];
+  for (let r = 0; r < rows; r++) {
+    const y = -h + (h / rows) * (r + 0.5) - paneH / 2 + 2;
+    for (let c = 0; c < cols; c++) {
+      const x = cell * (c + 0.5) - paneW / 2;
+      bars.push([x, y]);
+      const alight = tileNoise(Math.round(seed + r * 13 + c * 5 + storey * 3), Math.round(seed + c));
+      (alight < 0.5 ? litPanes : darkPanes).push([x, y]);
+    }
+  }
+
+  ctx.fillStyle = reveal;
+  ctx.beginPath();
+  for (const [x, y] of bars) ctx.rect(x - 1.8, y - 1.8, paneW + 3.6, paneH + 3.6);
+  ctx.fill();
+  ctx.fillStyle = off;
+  ctx.beginPath();
+  for (const [x, y] of darkPanes) ctx.rect(x, y, paneW, paneH);
+  ctx.fill();
+  ctx.fillStyle = on;
+  ctx.beginPath();
+  for (const [x, y] of litPanes) ctx.rect(x, y, paneW, paneH);
+  ctx.fill();
+  ctx.fillStyle = sill;
+  ctx.beginPath();
+  for (const [x, y] of bars) {
+    ctx.rect(x - 3, y + paneH + 1.8, paneW + 6, 2.2);
+    // Transom bar across each pane, so a window is not a plain rectangle.
+    if (fine) ctx.rect(x, y + paneH * 0.4, paneW, 1.4);
+  }
+  ctx.fill();
+
+  // Shutters, a shade down from the sills so they read as joinery beside the
+  // window rather than as a bright pilaster running up the whole wall.
+  if (shutters) {
+    ctx.fillStyle = tone(style.trim, lit * 0.78);
+    ctx.beginPath();
+    for (const [x, y] of bars) {
+      ctx.rect(x - 5.2, y - 1, 3.4, paneH + 2);
+      ctx.rect(x + paneW + 1.8, y - 1, 3.4, paneH + 2);
+    }
+    ctx.fill();
+  }
+}
+
+/** Striped awning valance hanging over a shopfront. */
+function drawValance(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  plan: BuildingPlan,
+  lit: number,
+  fine: boolean,
+): void {
+  const drop = 9;
+  const bands = Math.max(3, Math.round(w / 11));
+  const bandW = w / bands;
+  const bandA = tone(plan.awning, lit);
+  const bandB = tone('#fff2dc', lit);
+
+  for (const parity of [0, 1]) {
+    ctx.fillStyle = parity === 0 ? bandA : bandB;
+    ctx.beginPath();
+    for (let i = parity; i < bands; i += 2) ctx.rect(x + i * bandW, y, bandW + 0.6, drop);
+    ctx.fill();
+  }
+  if (plan.valance === 2 && fine) {
+    // Scalloped hem: the same two colours again, as half-discs on the bottom
+    // edge, so the awning does not end in a ruler-straight line.
     for (const parity of [0, 1]) {
       ctx.fillStyle = parity === 0 ? bandA : bandB;
       ctx.beginPath();
       for (let i = parity; i < bands; i += 2) {
-        ctx.rect(w * 0.02 + i * bandW, vy, bandW + 0.6, 9);
+        ctx.moveTo(x + i * bandW, y + drop);
+        ctx.arc(x + (i + 0.5) * bandW, y + drop, bandW / 2, Math.PI, 0, true);
       }
       ctx.fill();
     }
-    ctx.fillStyle = alpha('#2b1c14', 0.18);
-    ctx.fillRect(w * 0.02, vy + 7.4, w * 0.96, 1.8);
+  }
+  ctx.fillStyle = alpha('#2b1c14', 0.2);
+  ctx.fillRect(x, y - 1.6, w, 1.8);
+}
 
-    // Upper windows, in rows that stop below the parapet. Reveals, dark panes and
-    // lit panes are each batched into a single path for the same reason.
-    const rows = Math.max(1, Math.min(4, Math.floor((height - shopH) / 0.72)));
-    const cols = Math.max(2, Math.min(4, Math.round(w / 20)));
-    const cellW = (w * 0.8) / cols;
-    const paths: [string, Array<[number, number]>][] = [
-      [reveal, []],
-      [glassOff, []],
-      [glassOn, []],
-    ];
-    for (let r = 0; r < rows; r++) {
-      const wy = -(shopH + 0.42 + r * 0.72) * TILE_Z;
-      for (let c = 0; c < cols; c++) {
-        const wx = w * 0.1 + c * cellW;
-        paths[0]![1].push([wx - 1, wy - 1]);
-        const on = tileNoise(seed + r * 13 + c * 5, seed + c) < 0.55;
-        paths[on ? 2 : 1]![1].push([wx, wy]);
-      }
+/** Painted name board over a shopfront, lit from below after dark. */
+function drawNameBoard(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  plan: BuildingPlan,
+  lit: number,
+  night: number,
+  fine: boolean,
+): void {
+  ctx.fillStyle = tone(plan.style.accent, lit * 0.86);
+  ctx.fillRect(x, y, w, h);
+  ctx.fillStyle = alpha('#000000', 0.16);
+  ctx.fillRect(x, y + h - 1.6, w, 1.6);
+  if (!fine) return;
+
+  // Lettering, as a run of bars. Real glyphs would be unreadable at this size
+  // and would need a font; a rhythm of bars reads as a shop name and does not.
+  const words = 2 + Math.floor(roll(plan.seed, 40) * 2);
+  const inset = Math.max(3, w * 0.08);
+  const run = w - inset * 2;
+  ctx.fillStyle = blend(tone('#fff6de', lit), '#ffe9b0', night * 0.6);
+  ctx.beginPath();
+  let at = inset;
+  for (let word = 0; word < words && at < w - inset; word++) {
+    const letters = 3 + Math.floor(roll(plan.seed, 41 + word) * 4);
+    for (let i = 0; i < letters && at < w - inset; i++) {
+      ctx.rect(x + at, y + h * 0.3, Math.min(2.2, run * 0.05), h * 0.4);
+      at += 3.4;
     }
-    paths.forEach(([colour, boxes], i) => {
-      if (!boxes.length) return;
-      ctx.fillStyle = colour;
-      ctx.beginPath();
-      for (const [bx, by] of boxes) {
-        ctx.rect(bx, by, cellW - (i === 0 ? 3 : 5), i === 0 ? 15 : 13);
-      }
-      ctx.fill();
-    });
+    at += 4;
+  }
+  ctx.fill();
+}
+
+// ------------------------------------------------------------------- roofs
+
+/**
+ * The roof, drawn from the plan's own footprint at the plan's own level — the
+ * same two numbers the top storey's walls were drawn from.
+ */
+function drawRoof(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  plan: BuildingPlan,
+  night: number,
+  fine: boolean,
+): void {
+  const { roof, style } = plan;
+
+  // Cornice capping the walls. It takes its thickness out of the top of the
+  // wall rather than adding it on, so it cannot push the roof up or out.
+  const cornice = Math.min(0.09, (roof.level - plan.storeys[plan.storeys.length - 1]!.base) * 0.3);
+  isoSides(ctx, cx, cy, roof.sx, roof.sy, cornice, facesOf(style.trim), roof.level - cornice);
+
+  if (roof.kind === 'gable') drawGableRoof(ctx, cx, cy, plan, fine);
+  else drawDeckRoof(ctx, cx, cy, plan, night, fine);
+}
+
+/** Level of the standable surface of a deck roof. */
+const deckLevel = (roof: RoofPlan): number => roof.level + roof.parapet - 0.06;
+
+/**
+ * A flat roof inside a parapet: felt deck, coping rail around the edge, and an
+ * optional raised name board on the street side.
+ */
+function drawDeckRoof(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  plan: BuildingPlan,
+  night: number,
+  fine: boolean,
+): void {
+  const { roof, style } = plan;
+  const coping = tone(style.trim, 0.94);
+  // The parapet stands on the roof edge, so it shares the roof's footprint.
+  isoSides(ctx, cx, cy, roof.sx, roof.sy, roof.parapet, facesOf(shade(style.wall, 0.92)), roof.level);
+
+  const top = roof.level + roof.parapet;
+  const rim = Math.min(0.3, Math.min(roof.sx, roof.sy) * 0.1);
+  const capTop = planeOrigin(cx, cy, top);
+  diamondPath(ctx, capTop.x, capTop.y, roof.sx, roof.sy);
+  ctx.fillStyle = coping;
+  ctx.fill();
+
+  // Inside of the parapet, then the deck a little below the coping. Drawing the
+  // deck lower is what leaves the inner face of the far parapet showing, which
+  // is what makes the roof read as a tray rather than as a painted lid.
+  diamondPath(ctx, capTop.x, capTop.y, roof.sx - rim, roof.sy - rim);
+  ctx.fillStyle = shade(style.wall, 0.7);
+  ctx.fill();
+
+  const surface = planeOrigin(cx, cy, deckLevel(roof));
+  diamondPath(ctx, surface.x, surface.y, roof.sx - rim, roof.sy - rim);
+  ctx.fillStyle = plan.deck;
+  ctx.fill();
+  if (fine) {
+    // Felt seams, clipped to the deck so they cannot run off the side of it.
+    ctx.save();
+    ctx.clip();
+    ctx.strokeStyle = alpha('#5f5b51', 0.34);
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    const reach = (roof.sx + roof.sy) * 8;
+    for (let i = -2; i <= 2; i++) {
+      ctx.moveTo(surface.x - TILE_W * roof.sx * 0.5, surface.y + i * 11 - reach * 0.25);
+      ctx.lineTo(surface.x + TILE_W * roof.sx * 0.5, surface.y + i * 11 + reach * 0.25);
+    }
+    ctx.stroke();
     ctx.restore();
   }
 
-  // Canopy plate over the shopfront, and a parapet capping the roof.
-  isoBox(ctx, cx, cy, span * 1.09, span * 1.09, 0.06, faces(shade(wall, 0.88)), canopyH);
-  isoBox(ctx, cx, cy, span * 1.06, span * 1.06, 0.16, faces(shade(wall, 0.82)), height);
-  // A roof deck inside the parapet. Without its own colour the top face is just a
-  // pale slab of wall, and from this camera angle that is most of the building.
-  const deckY = cy - (height + 0.16) * TILE_Z;
-  diamondPath(ctx, cx, deckY, span * 0.94, span * 0.94);
-  ctx.fillStyle = '#9b9587';
-  ctx.fill();
-  ctx.strokeStyle = alpha('#6f6a5e', 0.4);
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  for (let i = -1; i <= 1; i++) {
-    const off = i * span * 8;
-    ctx.moveTo(cx - TILE_W * span * 0.46, deckY + off);
-    ctx.lineTo(cx + TILE_W * span * 0.46, deckY + off + TILE_H * span * 0.46);
-  }
-  ctx.stroke();
+  for (const g of plan.gear) drawRoofGear(ctx, cx, cy, plan, g, night);
 
-  // Roof clutter: a tank, a vent or a stair head, so the skyline is not a plateau.
-  const roll = tileNoise(seed + 21, seed - 4);
-  if (roll < 0.4) {
-    isoBox(ctx, cx - 10, cy + 4, span * 0.3, span * 0.3, 0.4, faces('#a8b0b4'), height + 0.14);
-  } else if (roll < 0.72) {
-    isoCylinder(ctx, cx + 8, cy - 2, span * 0.24, 0.44, '#c2b39a', height + 0.14);
-  } else {
-    isoBox(ctx, cx + 4, cy + 6, span * 0.24, span * 0.5, 0.26, faces(shade(wall, 0.94)), height + 0.14);
+  // The near two runs of coping again, so gear standing at the front edge sits
+  // behind the parapet instead of on top of it.
+  const outer = diamondCorners(cx, cy, roof.sx, roof.sy, top);
+  const inner = diamondCorners(cx, cy, roof.sx - rim, roof.sy - rim, top);
+  ctx.fillStyle = coping;
+  ctx.beginPath();
+  ctx.moveTo(outer.s.x, outer.s.y);
+  ctx.lineTo(outer.e.x, outer.e.y);
+  ctx.lineTo(inner.e.x, inner.e.y);
+  ctx.lineTo(inner.s.x, inner.s.y);
+  ctx.closePath();
+  ctx.moveTo(outer.s.x, outer.s.y);
+  ctx.lineTo(outer.w.x, outer.w.y);
+  ctx.lineTo(inner.w.x, inner.w.y);
+  ctx.lineTo(inner.s.x, inner.s.y);
+  ctx.closePath();
+  ctx.fill();
+
+  if (roof.crown) drawParapetCrown(ctx, cx, cy, plan, top, night);
+}
+
+/**
+ * A raised parapet section standing over the shopfront, carrying the trade name.
+ * The false front is the most main-street thing a small building can do, and it
+ * gives the skyline something other than parapets all cut to one height.
+ */
+function drawParapetCrown(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  plan: BuildingPlan,
+  base: number,
+  night: number,
+): void {
+  const { roof, style } = plan;
+  // The crown stands on the front edge, inside the footprint on both counts.
+  const alongY = plan.front === 'right';
+  const sx = alongY ? Math.min(0.3, roof.sx * 0.16) : roof.sx * 0.72;
+  const sy = alongY ? roof.sy * 0.72 : Math.min(0.3, roof.sy * 0.16);
+  const dx = alongY ? (roof.sx - sx) / 2 : 0;
+  const dy = alongY ? 0 : (roof.sy - sy) / 2;
+  const at = gearCentre(cx, cy, dx, dy);
+  const h = 0.34 + roll(plan.seed, 45) * 0.22;
+
+  isoSides(ctx, at.x, at.y, sx, sy, h, facesOf(style.accent), base);
+  diamondPath(ctx, at.x, at.y - (base + h) * TILE_Z, sx, sy);
+  ctx.fillStyle = tone(style.trim, 1.02);
+  ctx.fill();
+  if (night > 0.05) {
+    // A run of bulbs along the top of the board.
+    ctx.fillStyle = alpha('#ffe7ab', 0.5 + night * 0.4);
+    const corners = diamondCorners(at.x, at.y, sx, sy, base + h);
+    for (let i = 0; i <= 5; i++) {
+      const t = i / 5;
+      ctx.beginPath();
+      ctx.arc(
+        corners.s.x + (corners.e.x - corners.s.x) * t,
+        corners.s.y + (corners.e.y - corners.s.y) * t,
+        1.8,
+        0,
+        Math.PI * 2,
+      );
+      ctx.fill();
+    }
+  }
+}
+
+/**
+ * A pitched roof, built out of the four corners of the footprint it caps. The
+ * eaves land exactly on the walls: a real roof would oversail them a little, but
+ * an overhang is indistinguishable at this size from the lid-slid-off-the-box
+ * bug, so it stays flush.
+ */
+function drawGableRoof(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  plan: BuildingPlan,
+  fine: boolean,
+): void {
+  const { roof, style } = plan;
+  const c = diamondCorners(cx, cy, roof.sx, roof.sy, roof.level);
+  const rise = roof.rise * TILE_Z;
+  const alongX = roof.ridge === 'x';
+  const mid = (a: Corner, b: Corner): Corner => ({
+    x: (a.x + b.x) / 2,
+    y: (a.y + b.y) / 2 - rise,
+  });
+  // The ridge runs between the midpoints of the two end walls.
+  const a = alongX ? mid(c.n, c.w) : mid(c.n, c.e);
+  const b = alongX ? mid(c.e, c.s) : mid(c.w, c.s);
+  // The far corner is the same either way; which of the other two the far slope
+  // reaches, and which the near one does, swaps with the ridge.
+  const farEnd = alongX ? c.e : c.w;
+  const near = alongX ? c.w : c.e;
+
+  const tile = shade(style.accent, 0.86);
+  const quad = (p: Corner[], fill: string): void => {
+    ctx.fillStyle = fill;
+    ctx.beginPath();
+    ctx.moveTo(p[0]!.x, p[0]!.y);
+    for (let i = 1; i < p.length; i++) ctx.lineTo(p[i]!.x, p[i]!.y);
+    ctx.closePath();
+    ctx.fill();
+  };
+
+  // Far slope, then near slope, then the gable end that faces the camera.
+  quad([c.n, a, b, farEnd], shade(tile, 1.16));
+  quad([near, a, b, c.s], shade(tile, 0.84));
+  quad([near, c.s, b], shade(style.wall, 0.76));
+
+  // Courses down each slope and a ridge cap, which is what turns two flat
+  // quads into a tiled roof.
+  if (fine) {
+    ctx.strokeStyle = alpha('#2b1f18', 0.2);
+    ctx.lineWidth = 1.1;
+    ctx.beginPath();
+    for (let i = 1; i <= 3; i++) {
+      const t = i / 4;
+      ctx.moveTo(near.x + (a.x - near.x) * t, near.y + (a.y - near.y) * t);
+      ctx.lineTo(c.s.x + (b.x - c.s.x) * t, c.s.y + (b.y - c.s.y) * t);
+    }
+    ctx.stroke();
+  }
+  ctx.strokeStyle = tone(style.trim, 1.02);
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(a.x, a.y);
+  ctx.lineTo(b.x, b.y);
+  ctx.stroke();
+  // Fascia along the near eave, so the roof has a visible edge on the wall.
+  ctx.strokeStyle = tone(style.trim, 0.96);
+  ctx.lineWidth = 2.4;
+  ctx.beginPath();
+  ctx.moveTo(near.x, near.y + 1);
+  ctx.lineTo(c.s.x, c.s.y + 1);
+  ctx.stroke();
+}
+
+/** Screen position of a point `dx`, `dy` tiles from a footprint centre. */
+function gearCentre(cx: number, cy: number, dx: number, dy: number): Point {
+  return { x: cx + (dx - dy) * (TILE_W / 2), y: cy + (dx + dy) * (TILE_H / 2) };
+}
+
+/** Water tanks, plant, stair heads and hoardings, standing on the roof deck. */
+function drawRoofGear(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  plan: BuildingPlan,
+  g: RoofGear,
+  night: number,
+): void {
+  const { roof, style } = plan;
+  const at = gearCentre(cx, cy, g.dx, g.dy);
+  // Gear on a pitched roof emerges from the slope; everything else stands on
+  // the deck. Either way the level comes from the roof, not from a guess.
+  const base = roof.kind === 'gable' ? roof.level + roof.rise * 0.55 : deckLevel(roof);
+
+  switch (g.kind) {
+    case 'tank': {
+      // A tank on legs, with the legs actually under it.
+      ctx.fillStyle = '#6a6157';
+      const feet = diamondCorners(at.x, at.y, g.sx * 0.7, g.sy * 0.7, base);
+      for (const p of [feet.e, feet.s, feet.w]) {
+        ctx.fillRect(p.x - 1.3, p.y - g.h * 0.42 * TILE_Z, 2.6, g.h * 0.42 * TILE_Z);
+      }
+      isoCylinder(ctx, at.x, at.y, g.sx * 0.5, g.h * 0.58, '#bfae92', base + g.h * 0.42);
+      break;
+    }
+    case 'condenser': {
+      isoBox(ctx, at.x, at.y, g.sx, g.sy, g.h, facesOf('#a7b0b5'), base);
+      // Fan grille on the lid.
+      const lid = at.y - (base + g.h) * TILE_Z;
+      ctx.fillStyle = '#7f888d';
+      ctx.beginPath();
+      ctx.ellipse(at.x, lid, TILE_W * g.sx * 0.22, TILE_H * g.sy * 0.22, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#cfd6da';
+      ctx.beginPath();
+      ctx.ellipse(at.x, lid, TILE_W * g.sx * 0.09, TILE_H * g.sy * 0.09, 0, 0, Math.PI * 2);
+      ctx.fill();
+      break;
+    }
+    case 'vent': {
+      isoCylinder(ctx, at.x, at.y, g.sx * 0.5, g.h, '#9aa3a8', base);
+      isoCylinder(ctx, at.x, at.y, g.sx * 0.62, 0.05, '#c3cacd', base + g.h);
+      break;
+    }
+    case 'stair': {
+      // Stair head: rendered blockwork rather than another slab of wall colour,
+      // with a lip on top so it does not read as a lid of its own.
+      isoBox(ctx, at.x, at.y, g.sx, g.sy, g.h, facesOf('#b8b0a2'), base);
+      isoBox(ctx, at.x, at.y, g.sx * 0.94, g.sy * 0.94, 0.05, facesOf('#6e6a62'), base + g.h);
+      // Door on the corner that looks at the camera.
+      const face = diamondCorners(at.x, at.y, g.sx, g.sy, base + g.h);
+      const doorH = g.h * TILE_Z * 0.66;
+      ctx.fillStyle = shade(style.accent, 0.78);
+      ctx.beginPath();
+      ctx.moveTo(face.s.x - 7, face.s.y + 3.5 + g.h * TILE_Z - doorH);
+      ctx.lineTo(face.s.x, face.s.y + g.h * TILE_Z - doorH);
+      ctx.lineTo(face.s.x, face.s.y + g.h * TILE_Z);
+      ctx.lineTo(face.s.x - 7, face.s.y + 3.5 + g.h * TILE_Z);
+      ctx.closePath();
+      ctx.fill();
+      break;
+    }
+    case 'planter': {
+      isoBox(ctx, at.x, at.y, g.sx, g.sy, g.h, facesOf('#8a6a4c'), base);
+      const top = at.y - (base + g.h) * TILE_Z;
+      for (let i = -1; i <= 1; i++) {
+        ctx.fillStyle = i === 0 ? '#79b25f' : '#5f9a52';
+        ctx.beginPath();
+        ctx.ellipse(at.x + i * TILE_W * g.sx * 0.22, top - 3, 6.5, 5, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      break;
+    }
+    case 'chimney': {
+      isoBox(ctx, at.x, at.y, g.sx, g.sy, g.h, facesOf('#9c5f4c'), base);
+      isoBox(ctx, at.x, at.y, g.sx * 0.9, g.sy * 0.9, 0.07, facesOf('#d8cdba'), base + g.h);
+      break;
+    }
+    default: {
+      // Hoarding: a braced panel standing across the deck on two legs. The legs
+      // start at the deck and the bracing runs back to it, so the board reads as
+      // standing on the roof rather than hovering over it.
+      const legs = diamondCorners(at.x, at.y, g.sx, g.sy, base);
+      // The middle of the footprint at deck level, which is where the raking
+      // props have to land. Taking it from the unlifted centre would run them
+      // half way down the building.
+      const foot = planeOrigin(at.x, at.y, base);
+      const hpx = g.h * TILE_Z;
+      const boardTop = hpx;
+      const boardLow = hpx * 0.44;
+      ctx.strokeStyle = '#5e5a52';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      for (const p of [legs.e, legs.w]) {
+        ctx.moveTo(p.x, p.y);
+        ctx.lineTo(p.x, p.y - boardTop);
+        // Raking prop back down to the deck.
+        ctx.moveTo(p.x, p.y - boardLow);
+        ctx.lineTo(p.x + (foot.x - p.x) * 0.45, p.y + (foot.y - p.y) * 0.45);
+      }
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.moveTo(legs.w.x, legs.w.y - boardTop);
+      ctx.lineTo(legs.e.x, legs.e.y - boardTop);
+      ctx.lineTo(legs.e.x, legs.e.y - boardLow);
+      ctx.lineTo(legs.w.x, legs.w.y - boardLow);
+      ctx.closePath();
+      ctx.fillStyle = blend(shade(plan.awning, 1.05), '#ffe6ad', night * 0.4);
+      ctx.fill();
+      // Frame, so the board has an edge instead of floating as a flat colour.
+      ctx.strokeStyle = alpha('#2b1f18', 0.45);
+      ctx.lineWidth = 1.6;
+      ctx.stroke();
+
+      ctx.fillStyle = alpha('#fff6de', 0.8);
+      const bars = 4;
+      for (let i = 0; i < bars; i++) {
+        const t = 0.18 + (i / bars) * 0.62;
+        const x = legs.w.x + (legs.e.x - legs.w.x) * t;
+        const y = legs.w.y + (legs.e.y - legs.w.y) * t;
+        ctx.fillRect(x, y - boardTop + hpx * 0.13, 2.4, hpx * 0.24);
+      }
+      break;
+    }
   }
 }
 
@@ -965,12 +1871,12 @@ export function skyPalette(t: number): SkyPalette {
   const span = hi.at - lo.at || 1;
   const k = Math.min(1, Math.max(0, (t - lo.at) / span));
   return {
-    top: mix(lo.p.top, hi.p.top, k),
-    mid: mix(lo.p.mid, hi.p.mid, k),
-    ground: mix(lo.p.ground, hi.p.ground, k),
-    sun: mix(lo.p.sun, hi.p.sun, k),
-    far: mix(lo.p.far, hi.p.far, k),
-    near: mix(lo.p.near, hi.p.near, k),
+    top: blend(lo.p.top, hi.p.top, k),
+    mid: blend(lo.p.mid, hi.p.mid, k),
+    ground: blend(lo.p.ground, hi.p.ground, k),
+    sun: blend(lo.p.sun, hi.p.sun, k),
+    far: blend(lo.p.far, hi.p.far, k),
+    near: blend(lo.p.near, hi.p.near, k),
   };
 }
 

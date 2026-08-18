@@ -54,6 +54,51 @@ export function diamondPath(
   ctx.closePath();
 }
 
+export interface Corner {
+  x: number;
+  y: number;
+}
+
+/** The corners of a footprint, named for where they land on screen. */
+export interface Corners {
+  /** Far corner. */
+  n: Corner;
+  /** Right-hand corner. */
+  e: Corner;
+  /** Near corner, where the two camera-facing walls meet. */
+  s: Corner;
+  /** Left-hand corner. */
+  w: Corner;
+}
+
+/**
+ * The same four points {@link diamondPath} traces, handed back rather than
+ * stroked, `lift` tile-heights above the tile plane.
+ *
+ * This is how anything that is not a flat fill — a pitched roof, a parapet rim —
+ * gets built from the very footprint its walls were drawn from, instead of from
+ * a separately derived guess at where that footprint is.
+ */
+export function diamondCorners(
+  cx: number,
+  cy: number,
+  sx: number,
+  sy: number,
+  lift = 0,
+): Corners {
+  const ax = (TILE_W / 4) * sx;
+  const ay = (TILE_H / 4) * sx;
+  const bx = (TILE_W / 4) * sy;
+  const by = (TILE_H / 4) * sy;
+  const y = cy - lift * TILE_Z;
+  return {
+    n: { x: cx - ax + bx, y: y - ay - by },
+    e: { x: cx + ax + bx, y: y + ay - by },
+    s: { x: cx + ax - bx, y: y + ay + by },
+    w: { x: cx - ax - bx, y: y - ay + by },
+  };
+}
+
 export interface BoxColors {
   top: string;
   left: string;
@@ -63,6 +108,49 @@ export interface BoxColors {
 /** Derive the three visible face colours from a single base colour. */
 export function faces(base: string): BoxColors {
   return { top: shade(base, 1.18), left: shade(base, 0.7), right: shade(base, 0.9) };
+}
+
+/**
+ * The two camera-facing side faces of a box, with no lid on top.
+ *
+ * Reach for this whenever something else is going to cover the top — a roof, the
+ * storey above. A lid is a horizontal plate, and a horizontal plate drawn part
+ * way up a building lands square across the facade below it; if it is also wider
+ * than the walls it caps, it hangs off the sides as well. That combination is
+ * what makes a roof look like it slid off its building.
+ */
+export function isoSides(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  sx: number,
+  sy: number,
+  height: number,
+  colors: BoxColors,
+  lift = 0,
+): void {
+  const h = height * TILE_Z;
+  const { e, s, w } = diamondCorners(cx, cy, sx, sy, lift + height);
+
+  // Right face (towards +x, lower-right on screen).
+  ctx.fillStyle = colors.right;
+  ctx.beginPath();
+  ctx.moveTo(e.x, e.y);
+  ctx.lineTo(s.x, s.y);
+  ctx.lineTo(s.x, s.y + h);
+  ctx.lineTo(e.x, e.y + h);
+  ctx.closePath();
+  ctx.fill();
+
+  // Left face (towards +y, lower-left on screen).
+  ctx.fillStyle = colors.left;
+  ctx.beginPath();
+  ctx.moveTo(s.x, s.y);
+  ctx.lineTo(w.x, w.y);
+  ctx.lineTo(w.x, w.y + h);
+  ctx.lineTo(s.x, s.y + h);
+  ctx.closePath();
+  ctx.fill();
 }
 
 /**
@@ -81,46 +169,9 @@ export function isoBox(
   colors: BoxColors,
   lift = 0,
 ): void {
-  const ax = (TILE_W / 4) * sx;
-  const ay = (TILE_H / 4) * sx;
-  const bx = (TILE_W / 4) * sy;
-  const by = (TILE_H / 4) * sy;
-  const h = height * TILE_Z;
-  const baseY = cy - lift * TILE_Z;
-  const topY = baseY - h;
-
-  const T = [cx - ax + bx, topY - ay - by];
-  const R = [cx + ax + bx, topY + ay - by];
-  const B = [cx + ax - bx, topY + ay + by];
-  const L = [cx - ax - bx, topY - ay + by];
-
-  // Right face (towards +x, lower-right on screen).
-  ctx.fillStyle = colors.right;
-  ctx.beginPath();
-  ctx.moveTo(R[0]!, R[1]!);
-  ctx.lineTo(B[0]!, B[1]!);
-  ctx.lineTo(B[0]!, B[1]! + h);
-  ctx.lineTo(R[0]!, R[1]! + h);
-  ctx.closePath();
-  ctx.fill();
-
-  // Left face (towards +y, lower-left on screen).
-  ctx.fillStyle = colors.left;
-  ctx.beginPath();
-  ctx.moveTo(B[0]!, B[1]!);
-  ctx.lineTo(L[0]!, L[1]!);
-  ctx.lineTo(L[0]!, L[1]! + h);
-  ctx.lineTo(B[0]!, B[1]! + h);
-  ctx.closePath();
-  ctx.fill();
-
+  isoSides(ctx, cx, cy, sx, sy, height, colors, lift);
   ctx.fillStyle = colors.top;
-  ctx.beginPath();
-  ctx.moveTo(T[0]!, T[1]!);
-  ctx.lineTo(R[0]!, R[1]!);
-  ctx.lineTo(B[0]!, B[1]!);
-  ctx.lineTo(L[0]!, L[1]!);
-  ctx.closePath();
+  diamondPath(ctx, cx, cy - (lift + height) * TILE_Z, sx, sy);
   ctx.fill();
 }
 

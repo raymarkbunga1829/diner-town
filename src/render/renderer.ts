@@ -367,6 +367,9 @@ export class Renderer {
     const { ctx } = this;
     const { BLOCK, STREET } = Renderer;
     const view = this.visibleTiles(BLOCK);
+    // Zoomed out to survey the town there are a couple of hundred buildings on
+    // screen at once, so the buildings are told how much detail is worth drawing.
+    const zoom = this.camera.zoom;
 
     // ---- street trees and benches on the verge across the road
     for (let ty = view.minTy; ty <= view.maxTy; ty++) {
@@ -408,23 +411,34 @@ export class Renderer {
         if (!rect) continue;
 
         if (kind === 'build' && rect.w >= 2 && rect.h >= 2) {
-          // Wide plots take a terrace of two, which stops every street looking
-          // like a row of warehouses.
-          const span = Math.min(rect.w, rect.h) - 0.2;
-          const terrace = rect.w >= 5 && tileNoise(seed + 3, seed + 8) > 0.4;
-          const units: Array<[number, number, number]> = terrace
-            ? [
-                [rect.x + rect.w * 0.27, rect.y + rect.h / 2, Math.min(rect.w * 0.46, rect.h) - 0.2],
-                [rect.x + rect.w * 0.73, rect.y + rect.h / 2, Math.min(rect.w * 0.46, rect.h) - 0.2],
-              ]
-            : [[rect.x + rect.w / 2, rect.y + rect.h / 2, span]];
-          units.forEach(([cx, cy, s], i) => {
-            const height = 1.6 + tileNoise(seed + i * 11, 9) * 2.3;
-            if (!this.inView(cx - 0.5, cy - 0.5, height + 0.4, s * 40)) return;
+          // Buildings take the plot they are given rather than the largest square
+          // inside it, so a deep block gets a deep building. Long plots are split
+          // into a pair, which stops every street looking like a row of
+          // warehouses.
+          const splitX = rect.w >= rect.h;
+          const long = splitX ? rect.w : rect.h;
+          const pair = long >= 5 && tileNoise(seed + 3, seed + 8) > 0.4;
+          // Plot centre, then footprint along each grid axis, in tiles.
+          const units: Array<[number, number, number, number]> = [];
+          if (pair) {
+            for (const f of [0.27, 0.73]) {
+              units.push(
+                splitX
+                  ? [rect.x + rect.w * f, rect.y + rect.h / 2, rect.w * 0.46 - 0.3, rect.h - 0.3]
+                  : [rect.x + rect.w / 2, rect.y + rect.h * f, rect.w - 0.3, rect.h * 0.46 - 0.3],
+              );
+            }
+          } else {
+            units.push([rect.x + rect.w / 2, rect.y + rect.h / 2, rect.w - 0.3, rect.h - 0.3]);
+          }
+          units.forEach(([cx, cy, sx, sy], i) => {
+            const height = 1.6 + tileNoise(seed + i * 11, 9) * 2.6;
+            if (!this.inView(cx - 0.5, cy - 0.5, height + 0.8, Math.max(sx, sy) * 40)) return;
             const c = tileToWorld(cx, cy);
             out.push({
               depth: depthOf(cx, cy, height),
-              draw: () => drawShopBlock(ctx, c.x, c.y, s, height, seed + i * 17, night),
+              draw: () =>
+                drawShopBlock(ctx, c.x, c.y, sx, sy, height, seed + i * 17, night, zoom),
             });
           });
         } else if (kind === 'park' || rect.w < 2 || rect.h < 2) {
@@ -466,6 +480,7 @@ export class Renderer {
    */
   private collectTerrace(out: Drawable[], time: number, night: number): void {
     const { ctx } = this;
+    const zoom = this.camera.zoom;
     const { UNIT, TERRACE_FROM, TERRACE_TO } = Renderer;
     const size = this.grid.size;
     const depth = TERRACE_TO - TERRACE_FROM + 1;
@@ -513,12 +528,19 @@ export class Renderer {
           continue;
         }
 
-        const span = Math.min(UNIT, depth) - 0.15;
+        // The plot is wider along the street than it is deep, so the building is
+        // too: a terrace of squares wastes half the frontage and reads as a row
+        // of separate cubes. Each plot gives up a little of its width so the
+        // joints between neighbours show.
+        const frontage = UNIT - 0.15 - tileNoise(seed + 41, seed - 7) * 0.35;
+        const back = depth - 0.15 - tileNoise(seed - 19, seed + 23) * 0.3;
+        const spanX = side % 2 === 0 ? frontage : back;
+        const spanY = side % 2 === 0 ? back : frontage;
         // Tall enough that the facade, not the roof, is what the camera sees.
-        const height = 2.5 + tileNoise(seed + 3, seed) * 2.1;
+        const height = 2.3 + tileNoise(seed + 3, seed) * 2.5;
         out.push({
           depth: depthOf(cx, cy, height),
-          draw: () => drawShopBlock(ctx, c.x, c.y, span, height, seed, night),
+          draw: () => drawShopBlock(ctx, c.x, c.y, spanX, spanY, height, seed, night, zoom),
         });
       }
     }
