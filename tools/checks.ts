@@ -578,6 +578,144 @@ function addOrphanStools(game: Game, grid: Grid, want: number): number {
   return placed;
 }
 
+/** Drop one piece of furniture on the first tile the shop would allow. */
+function placeAnywhere(game: Game, grid: Grid, defId: string): boolean {
+  const def = FURNITURE_BY_ID[defId]!;
+  const spots: Array<[number, number]> = [];
+  if (def.role === 'wallDecor') {
+    for (let i = 0; i < grid.size; i++) spots.push([i, -1], [-1, i]);
+  } else {
+    for (let y = 0; y < grid.size; y++) for (let x = 0; x < grid.size; x++) spots.push([x, y]);
+  }
+  for (const [tx, ty] of spots) {
+    if (!grid.canPlace(def, tx, ty, 0)) continue;
+    game.data.placed.push({ uid: game.nextUid(), defId, tx, ty, rot: 0 });
+    game.touch();
+    grid.sync();
+    return true;
+  }
+  return false;
+}
+
+// -------------------------------------------------------------------- style
+
+group('Style is judged on the room, not on how many chairs it holds', () => {
+  const game = new Game(createNewGame());
+  const grid = new Grid(game);
+  grid.sync();
+
+  check(
+    'the starter diner is not written off as styleless',
+    game.styleScore > 0.3,
+    `Style ${game.styleScore.toFixed(2)} on ambience ${game.ambience} of ${game.ambienceTarget}`,
+  );
+
+  // The coach's fourth step: another table with a chair on each side. Doing what
+  // it asks must not cost the player the rating it is trying to build for them.
+  const wasStyle = game.styleScore;
+  const wasRating = game.rating;
+  check('a seating group fits in the starter room', addSeatingGroup(game, grid));
+  check(
+    'the group is the seating the coach asks for',
+    game.usableSeatCount >= COACH_TARGET_SEATS,
+    `${game.usableSeatCount} usable seats`,
+  );
+  check(
+    'the extra seats do not cost Style',
+    game.styleScore >= wasStyle,
+    `${wasStyle.toFixed(3)} -> ${game.styleScore.toFixed(3)}`,
+  );
+  check(
+    'nor the star rating',
+    game.rating >= wasRating,
+    `${wasRating.toFixed(2)} -> ${game.rating.toFixed(2)}`,
+  );
+
+  // And it is not a one-off: no amount of honest seating walks Style backwards.
+  let floor = game.styleScore;
+  let groups = 0;
+  while (groups < 4 && addSeatingGroup(game, grid)) {
+    groups++;
+    check(
+      `seating group ${groups + 1} does not walk Style back`,
+      game.styleScore >= floor,
+      `${floor.toFixed(3)} -> ${game.styleScore.toFixed(3)}`,
+    );
+    floor = game.styleScore;
+  }
+  check('the room took further seating groups', groups > 0, `${groups} more groups`);
+
+  // Loose chairs are the same story: they are worth no Style, and cost none.
+  const stools = new Game(createNewGame());
+  const stoolGrid = new Grid(stools);
+  stoolGrid.sync();
+  const plainStyle = stools.styleScore;
+  check('three orphan stools were placed', addOrphanStools(stools, stoolGrid, 3) === 3);
+  check(
+    'chairs on their own leave Style alone',
+    stools.styleScore === plainStyle,
+    `${plainStyle.toFixed(3)} -> ${stools.styleScore.toFixed(3)}`,
+  );
+});
+
+group('Style still has to be bought with decor', () => {
+  const stripped = new Game(createNewGame());
+  stripped.data.placed = stripped.data.placed.filter((p) => stripped.defOf(p)?.role !== 'decor');
+  stripped.touch();
+
+  const dressed = new Game(createNewGame());
+  const grid = new Grid(dressed);
+  grid.sync();
+  for (const id of ['plant', 'rug_small', 'lamp', 'clock', 'painting']) {
+    check(`a ${id} fits in the room being dressed`, placeAnywhere(dressed, grid, id));
+  }
+
+  check(
+    'an undressed room scores badly',
+    stripped.styleScore < 0.3,
+    `Style ${stripped.styleScore.toFixed(2)}`,
+  );
+  check(
+    'plants, rugs, lamps and pictures are what lift it',
+    dressed.styleScore > stripped.styleScore + 0.4,
+    `${stripped.styleScore.toFixed(2)} against ${dressed.styleScore.toFixed(2)}`,
+  );
+  check(
+    'full marks still take more than a first shop',
+    dressed.styleScore < 1,
+    `Style ${dressed.styleScore.toFixed(2)}`,
+  );
+
+  // The trash bin is sold as a −1 Style item, so it had better still sting.
+  const noBin = new Game(createNewGame());
+  noBin.data.placed = noBin.data.placed.filter((p) => p.defId !== 'bin_small');
+  noBin.touch();
+  check(
+    'the trash bin still costs Style',
+    noBin.styleScore > new Game(createNewGame()).styleScore,
+    `${new Game(createNewGame()).styleScore.toFixed(3)} without, ${noBin.styleScore.toFixed(3)} with the bin gone`,
+  );
+
+  // A bigger floor is more room to dress, which is the one treadmill left — and
+  // it only ever moves when the player chooses to buy an expansion.
+  const expanded = new Game(createNewGame());
+  expanded.data.gridSize += 4;
+  expanded.touch();
+  const snug = new Game(createNewGame());
+  check(
+    'a bigger dining room asks for more decor',
+    expanded.ambienceTarget > snug.ambienceTarget && expanded.styleScore < snug.styleScore,
+    `${snug.ambienceTarget} -> ${expanded.ambienceTarget}`,
+  );
+
+  // Showpieces are still the way to a full room rating.
+  const showy = new Game(createNewGame());
+  const showyGrid = new Grid(showy);
+  showyGrid.sync();
+  for (let i = 0; i < 3 && showy.styleScore < 1; i++) placeAnywhere(showy, showyGrid, 'fountain');
+  check('a room of showpieces reaches full marks', showy.styleScore === 1, `Style ${showy.styleScore.toFixed(2)}`);
+});
+
 // ------------------------------------------------------------- arrival rate
 
 group('Arrivals follow the seats a guest can actually use', () => {

@@ -72,6 +72,7 @@ everything added since.
 
 - **Dish mastery.** Every serving earns a recipe experience. Each of the ten mastery levels adds 12% to the price and shaves a little off the cook time, so a focused menu cooked constantly beats a sprawling one.
 - **Star rating.** A weighted blend of Style (decor), Service (how fast you serve), Cleanliness (dirty tables) and Menu quality. Together with the size of the room it sets how often customers arrive, so it is the main dial you are turning.
+- **Style.** Your decor is judged against the floor it has to fill rather than against your seating, so adding tables and chairs never drags the rating down. The first few pieces move the number the most, a room with nothing in it scores close to nothing, and every expansion leaves more floor to dress.
 - **Seats you can fill.** Arrivals scale with the seats a guest could really sit in — a chair touching a table with a walkway to it — and a dirty table takes its whole group out of service until it is wiped. Stools parked on their own pull nobody in, so a room of fake seats never fills up with a queue it cannot serve. Reputation in Manage shows how many of your chairs count.
 - **Restaurant level.** Earned by serving food; unlocks recipes, furniture, menu slots, staff positions and dining-room extensions up to 16x16.
 - **Staff.** Waiters, chefs and cleaners each have a skill level you can train and an energy bar that drains as they work. Wages come out of the till at the start of every in-game day.
