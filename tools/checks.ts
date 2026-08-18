@@ -19,7 +19,7 @@ import { FURNITURE_BY_ID } from '../src/game/data/furniture';
 import { Grid } from '../src/game/grid';
 import { findPath } from '../src/game/path';
 import { Simulation } from '../src/game/sim';
-import { createNewGame, Game } from '../src/game/state';
+import { createNewGame, Game, SAVE_KEY } from '../src/game/state';
 import { COACH_STEPS } from '../src/ui/tutorial';
 
 let failures = 0;
@@ -279,6 +279,84 @@ group('Dish mastery', () => {
   check(
     'mastery raises the price',
     dishPrice(burger, MAX_DISH_LEVEL) > dishPrice(burger, 1) * 1.9,
+  );
+});
+
+// ---------------------------------------------------------- save/load recovery
+
+group("Reloading clears last shift's plates", () => {
+  // The real save path goes through localStorage, so stand up just enough of it
+  // to exercise Game.save/Game.load rather than reaching past them.
+  const store = new Map<string, string>();
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: {
+      getItem: (k: string): string | null => store.get(k) ?? null,
+      setItem: (k: string, v: string): void => void store.set(k, v),
+      removeItem: (k: string): void => void store.delete(k),
+    },
+  });
+
+  const before = new Game(createNewGame());
+  const stove = before.placedWithRole('stove')[0]!;
+  const counter = before.placedWithRole('counter')[0]!;
+  const table = before.placedWithRole('table')[0]!;
+
+  // With a single stove, one stranded plate id is enough to stall the kitchen
+  // for good, which is what makes this worth guarding.
+  check('starter kitchen has exactly one stove', before.placedWithRole('stove').length === 1);
+  const slots = before.defOf(counter)?.slots ?? 1;
+
+  // Stand in for a save written mid-service: plate ids referring to orders that
+  // will not exist after the reload, because orders are never serialised.
+  stove.plates = [901];
+  counter.plates = Array.from({ length: slots }, (_, i) => 902 + i);
+  table.dirty = true;
+  before.save();
+
+  const raw = localStorage.getItem(SAVE_KEY);
+  check('the save really does carry plate ids', !!raw && /"plates":\[\d/.test(raw));
+
+  const after = Game.load();
+  check('the save reloads', after !== null);
+  if (!after) return;
+
+  // Orders live only for the session, so every id in the save is dangling.
+  check('no orders survive the reload', after.orders.length === 0, `${after.orders.length} orders`);
+
+  const loadedStove = after.placedWithRole('stove')[0]!;
+  const loadedCounter = after.placedWithRole('counter')[0]!;
+  check(
+    'the stove comes back with no plates on it',
+    (loadedStove.plates?.length ?? 0) === 0,
+    `${loadedStove.plates?.length ?? 0} left`,
+  );
+  check(
+    'the counter comes back with no plates on it',
+    (loadedCounter.plates?.length ?? 0) === 0,
+    `${loadedCounter.plates?.length ?? 0} left`,
+  );
+  check(
+    'no plate ids are left anywhere',
+    after.data.placed.every((p) => (p.plates?.length ?? 0) === 0),
+  );
+
+  // Dirt is real world state, not a session id, so it must survive.
+  check('a dirty table is still dirty', after.placedWithRole('table')[0]?.dirty === true);
+
+  // The point of all this: the kitchen has to be able to work again.
+  const sim = new Simulation(after);
+  const step = 1 / 20;
+  for (let i = 0; i < 20 * 240; i++) sim.update(step);
+  check(
+    'the reloaded kitchen cooks again',
+    after.data.stats.dishesCooked > 0,
+    `cooked ${after.data.stats.dishesCooked}`,
+  );
+  check(
+    'the reloaded diner serves again',
+    after.data.stats.customersServed > 0,
+    `served ${after.data.stats.customersServed}`,
   );
 });
 
