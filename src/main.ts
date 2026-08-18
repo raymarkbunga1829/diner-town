@@ -22,8 +22,10 @@ import { createShopPanel } from './ui/panels/shop';
 import { createStaffPanel } from './ui/panels/staff';
 import {
   coachAction,
+  coachBaseline,
   coachProgress,
   COACH_STEPS,
+  type CoachBaseline,
   type CoachContext,
   type CoachStep,
 } from './ui/tutorial';
@@ -89,6 +91,9 @@ class App implements AppApi {
     window.addEventListener('pagehide', () => this.save());
 
     this.centreCamera(true);
+    // Taken here rather than at the field, so a reopened save asks the tip on
+    // screen for a fresh cover instead of counting yesterday's shift.
+    this.coachSince = coachBaseline(game);
     this.showCoach();
   }
 
@@ -257,7 +262,7 @@ class App implements AppApi {
   /** What the coach is allowed to read. Synced, because seats are spatial. */
   private coachContext(): CoachContext {
     this.sim.grid.sync();
-    return { game: this.game, grid: this.sim.grid, seen: this.seen };
+    return { game: this.game, grid: this.sim.grid, seen: this.seen, since: this.coachSince };
   }
 
   private showCoach(): void {
@@ -296,6 +301,7 @@ class App implements AppApi {
 
   private advanceCoach(to: number): void {
     this.game.data.tutorialStep = to;
+    this.coachSince = coachBaseline(this.game);
     this.coachHidden = false;
     this.game.touch();
     this.save();
@@ -303,8 +309,10 @@ class App implements AppApi {
   }
 
   private coachCheck = 0;
-  /** Set when the player puts the current tip away by hand. */
+  /** Set when the player puts the current tip away by hand, until the next one. */
   private coachHidden = false;
+  /** Where the counters stood when the tip on screen went up. */
+  private coachSince: CoachBaseline = { customersServed: 0, tablesCleaned: 0 };
 
   private checkCoach(immediate = false): void {
     this.coachCheck += 1;

@@ -41,15 +41,18 @@ want dealt with — including the marker floating above it:
 ### The first hour
 
 A coach thread runs alongside the game rather than in front of it — nothing is
-ever paused, and every tip can be hidden with the **×** if you would rather work
-it out yourself. What a tip will not do is tick itself off. Each one waits for
-the thing it teaches to actually happen: the welcome clears once a guest has
-eaten and paid, the cleaning tip once a table has gone from dirty back to clean,
-the seating tip once the room has six seats a guest could really sit in — a chair
-touching a table with a walkway to it, not a stool parked on its own. **Show me**
-pans to whatever the tip is about, opens the panel that fixes it, or starts
-placing the piece you are missing, so reading the Market and the Menu still
-introduces them without standing in for a shift.
+ever paused, and the **×** hides a tip you would rather work out for yourself
+until the next one is ready. What a tip will not do is tick itself off. Each one
+waits for the thing it teaches to happen *while it is on screen*: the welcome
+clears when a guest has eaten and paid, the cleaning tip when a table has gone
+from dirty back to clean, the seating tip when the room has six seats a guest
+could really sit in — a chair touching a table with a walkway to it, not a stool
+parked on its own. Counting only what happens from the moment a tip appears is
+what stops the team quietly satisfying a lesson before it has been read.
+**Show me** pans to whatever the tip is about, opens the panel that fixes it
+(hiring, when the wiping tip finds no cleaner), or starts placing the piece you
+are missing, so reading the Market and the Menu still introduces them without
+standing in for a shift.
 
 ### What drives progression
 

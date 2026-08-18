@@ -8,6 +8,24 @@ export interface CoachFocus {
 }
 
 /**
+ * Counters as they stood when the tip on screen appeared. Steps compare against
+ * these rather than the lifetime totals, so a tip asks for something to happen
+ * while the player is reading it instead of being handed a shift that already
+ * ran — which is what would otherwise skip the tip before it was read.
+ */
+export interface CoachBaseline {
+  customersServed: number;
+  tablesCleaned: number;
+}
+
+export function coachBaseline(game: Game): CoachBaseline {
+  return {
+    customersServed: game.data.stats.customersServed,
+    tablesCleaned: game.data.stats.tablesCleaned,
+  };
+}
+
+/**
  * Everything a step is allowed to look at. The grid is included because a seat
  * only counts when a chair, a table and a walkway line up, which is a spatial
  * question rather than a count of what has been bought.
@@ -17,6 +35,7 @@ export interface CoachContext {
   grid: Grid;
   /** Tips the player has acknowledged this session, e.g. `panel:market`. */
   seen: Set<string>;
+  since: CoachBaseline;
 }
 
 /** Sheet a "Show me" can open instead of panning. */
@@ -72,9 +91,14 @@ function firstCleaner(game: Game): CoachFocus | null {
   return s ? { tx: s.tx, ty: s.ty } : null;
 }
 
-/** A guest has eaten and paid, on this save. */
-function servedACover(game: Game): boolean {
-  return game.data.stats.customersServed > 0;
+/** A guest has eaten and paid since the tip on screen went up. */
+function servedACover(ctx: CoachContext): boolean {
+  return ctx.game.data.stats.customersServed > ctx.since.customersServed;
+}
+
+/** A table has gone from dirty back to clean since the tip went up. */
+function wipedATable(ctx: CoachContext): boolean {
+  return ctx.game.data.stats.tablesCleaned > ctx.since.tablesCleaned;
 }
 
 /**
@@ -89,7 +113,7 @@ export const COACH_STEPS: readonly CoachStep[] = [
   {
     html:
       'Welcome to your diner. Guests arrive through the door, look for a <b>clean seat next to a table</b>, then order from your menu. Tap a waiting guest to seat them — this tip stays up until somebody has eaten and paid.',
-    done: (ctx) => servedACover(ctx.game),
+    done: (ctx) => servedACover(ctx),
     cta: 'Show me',
     mark: 'intro',
     focus: (ctx) => firstRole(ctx.game, 'chair') ?? firstRole(ctx.game, 'table'),
@@ -108,7 +132,9 @@ export const COACH_STEPS: readonly CoachStep[] = [
     html:
       'Guests leave a mess. Your <b>cleaner</b> wipes dirty tables so they can be reseated, and tapping a dirty table sends them over now. No cleaner on the payroll? Hire one from Staff. This tip clears once a table has been wiped.',
     done: (ctx) =>
-      ctx.game.staffByRole('cleaner').length > 0 && ctx.game.data.stats.tablesCleaned > 0,
+      ctx.game.staffByRole('cleaner').length > 0 &&
+      ctx.seen.has('noticed-cleaner') &&
+      wipedATable(ctx),
     cta: 'Show me',
     mark: 'noticed-cleaner',
     // Nothing to pan to when there is nobody to do the wiping, so send the
@@ -155,9 +181,10 @@ export const COACH_STEPS: readonly CoachStep[] = [
   {
     html:
       'You have got the hang of it. Keep an eye on <b>Reputation</b> under Manage to see exactly what is holding you back.',
-    // Re-checked here as well as on the first step, so a save that somehow
-    // arrived at the outro without a cover still cannot sign the coach off.
-    done: (ctx) => ctx.seen.has('outro') && servedACover(ctx.game),
+    // The lifetime total, not the baseline: the first step already insisted on a
+    // cover, and this is here so a save that somehow arrived at the sign-off
+    // without ever serving anyone still cannot tick the coach off.
+    done: (ctx) => ctx.seen.has('outro') && ctx.game.data.stats.customersServed > 0,
     cta: 'Thanks',
     mark: 'outro',
   },
@@ -170,7 +197,13 @@ export const COACH_STEPS: readonly CoachStep[] = [
  */
 export function coachProgress(step: number, ctx: CoachContext): number {
   let index = Math.max(0, step);
-  while (index < COACH_STEPS.length && COACH_STEPS[index]!.done(ctx)) index++;
+  let at = ctx;
+  while (index < COACH_STEPS.length && COACH_STEPS[index]!.done(at)) {
+    index++;
+    // The next tip is going up now, so it is judged from now on rather than
+    // being credited with whatever the step before it just watched happen.
+    at = { ...ctx, since: coachBaseline(ctx.game) };
+  }
   return index;
 }
 
