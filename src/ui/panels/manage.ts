@@ -188,7 +188,7 @@ function renderOverview(app: AppApi, body: HTMLElement): void {
 
 /**
  * The endgame track. Once the restaurant level caps out, experience becomes
- * fame, and the first five stars each hand over something real. Hidden entirely
+ * fame, and the first ten stars each hand over something real. Hidden entirely
  * before then, so a diner on day three is never shown a goal it cannot chase.
  */
 function renderFame(app: AppApi, body: HTMLElement): void {
