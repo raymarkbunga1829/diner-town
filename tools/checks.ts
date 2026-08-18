@@ -63,6 +63,7 @@ import {
 import type { Order, SaveData, Staff } from '../src/game/types';
 import { buildingBox } from '../src/render/renderer';
 import { planeOrigin, planStreetBuilding, roofSeam } from '../src/render/scenery';
+import { diamondCorners } from '../src/render/shapes';
 import { nextCelebration } from '../src/ui/cards';
 import {
   coachAction,
@@ -132,6 +133,28 @@ group('Street buildings', () => {
     level.x === up.x && up.y === level.y - 3 * TILE_Z,
     `${JSON.stringify(level)} vs ${JSON.stringify(up)}`,
   );
+
+  // The footprint the walls are drawn from has to be centred on the anchor, or
+  // "same footprint, same level" would not mean "same place" and none of the
+  // checks below would be worth anything.
+  for (const [sx, sy] of [[1, 1], [3.85, 2.85], [5.7, 1.7]] as Array<[number, number]>) {
+    const flat = diamondCorners(400, 250, sx, sy);
+    const lifted = diamondCorners(400, 250, sx, sy, 2);
+    check(
+      `a ${sx}x${sy} footprint is centred on its anchor`,
+      Math.abs(flat.n.x + flat.s.x - 800) < 1e-9 &&
+        Math.abs(flat.e.x + flat.w.x - 800) < 1e-9 &&
+        Math.abs(flat.n.y + flat.s.y - 500) < 1e-9 &&
+        Math.abs(flat.e.y + flat.w.y - 500) < 1e-9,
+      JSON.stringify(flat),
+    );
+    check(
+      `lifting a ${sx}x${sy} footprint does not slide it sideways`,
+      flat.n.x === lifted.n.x &&
+        flat.s.x === lifted.s.x &&
+        Math.abs(lifted.s.y - (flat.s.y - 2 * TILE_Z)) < 1e-9,
+    );
+  }
 
   // Everything the town can hand a building: narrow infill plots through to a
   // whole city block, and single-storey sheds through to towers.
