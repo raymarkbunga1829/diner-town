@@ -62,6 +62,7 @@ import {
 } from '../src/game/state';
 import type { Order, SaveData, Staff } from '../src/game/types';
 import { buildingBox } from '../src/render/renderer';
+import { planeOrigin, planStreetBuilding, roofSeam } from '../src/render/scenery';
 import { nextCelebration } from '../src/ui/cards';
 import {
   coachAction,
@@ -111,6 +112,117 @@ group('Isometric projection', () => {
   const flat = tileToWorld(4, 4, 0);
   const raised = tileToWorld(4, 4, 2);
   check('height only moves vertically', flat.x === raised.x && raised.y === flat.y - 2 * TILE_Z);
+});
+
+// -------------------------------------------------------- street buildings
+
+/**
+ * Roofs used to be drawn from their own footprint and their own lift rather than
+ * from the walls they cap, which left every neighbouring building wearing its
+ * roof like a hat two sizes too big and half a tile to one side. Nothing about
+ * that was visible from a type error, so the geometry is planned by a pure
+ * function and asserted here instead: the roof plane and the top of the walls
+ * are two answers to one question, and they have to match.
+ */
+group('Street buildings', () => {
+  const level = planeOrigin(400, 250, 0);
+  const up = planeOrigin(400, 250, 3);
+  check(
+    'a level is a purely vertical move',
+    level.x === up.x && up.y === level.y - 3 * TILE_Z,
+    `${JSON.stringify(level)} vs ${JSON.stringify(up)}`,
+  );
+
+  // Everything the town can hand a building: narrow infill plots through to a
+  // whole city block, and single-storey sheds through to towers.
+  let plans = 0;
+  let gearPieces = 0;
+  const seams: string[] = [];
+  const oversail: string[] = [];
+  const stacking: string[] = [];
+  const strayGear: string[] = [];
+
+  for (const spanX of [1.7, 2.5, 2.85, 3.85, 4.6, 5.7]) {
+    for (const spanY of [1.7, 2.5, 2.85, 3.85, 5.7]) {
+      for (const height of [1.2, 1.6, 2.3, 3.0, 3.4, 4.2, 5.0]) {
+        for (const seed of [0, 1, 7, 13, 29, 137, 911, -46, -317]) {
+          plans++;
+          const plan = planStreetBuilding(spanX, spanY, height, seed);
+          const where = `${spanX}x${spanY} h${height} seed ${seed}`;
+          const cap = plan.storeys[plan.storeys.length - 1]!;
+
+          // The seam: the roof plane against the top of the walls under it.
+          const seam = roofSeam(400, 250, plan);
+          if (seam.walls.x !== seam.roof.x || seam.walls.y !== seam.roof.y) seams.push(where);
+          // And the two footprints that meet at it.
+          if (
+            seam.roofFoot[0] > seam.wallFoot[0] + 1e-9 ||
+            seam.roofFoot[1] > seam.wallFoot[1] + 1e-9
+          ) {
+            oversail.push(where);
+          }
+
+          // Storeys stack: no gaps, no overlaps, none wider than the one below,
+          // and the ground floor takes the whole plot.
+          const ground = plan.storeys[0]!;
+          if (
+            ground.base !== 0 ||
+            Math.abs(ground.sx - spanX) > 1e-9 ||
+            Math.abs(ground.sy - spanY) > 1e-9 ||
+            Math.abs(cap.top - height) > 1e-9
+          ) {
+            stacking.push(`${where}: footprint or total height drifted`);
+          }
+          for (let i = 1; i < plan.storeys.length; i++) {
+            const below = plan.storeys[i - 1]!;
+            const s = plan.storeys[i]!;
+            if (
+              Math.abs(s.base - below.top) > 1e-9 ||
+              s.top <= s.base ||
+              s.sx > below.sx + 1e-9 ||
+              s.sy > below.sy + 1e-9
+            ) {
+              stacking.push(`${where}: storey ${i}`);
+            }
+          }
+
+          // Roof gear stands wholly on the roof. A vent hanging over the parapet
+          // is the same bug as a roof hanging over the walls, only smaller.
+          for (const g of plan.gear) {
+            gearPieces++;
+            if (
+              Math.abs(g.dx) + g.sx / 2 > plan.roof.sx / 2 + 1e-9 ||
+              Math.abs(g.dy) + g.sy / 2 > plan.roof.sy / 2 + 1e-9
+            ) {
+              strayGear.push(`${where}: ${g.kind}`);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  check('every shape of building was planned', plans > 1500, `${plans} plans`);
+  check('and every one of them put gear on its roof', gearPieces >= plans, `${gearPieces} pieces`);
+  check('roofs sit on the plane the walls stop at', seams.length === 0, seams.slice(0, 3).join('; '));
+  check('no roof oversails its walls', oversail.length === 0, oversail.slice(0, 3).join('; '));
+  check('storeys stack on each other', stacking.length === 0, stacking.slice(0, 3).join('; '));
+  check('roof gear stands on the roof', strayGear.length === 0, strayGear.slice(0, 3).join('; '));
+
+  // A gable is the one roof with a shape of its own, so make sure the town
+  // actually builds both kinds rather than quietly settling on one.
+  const kinds = new Set<string>();
+  for (let seed = 0; seed < 60; seed++) {
+    kinds.add(planStreetBuilding(3.85, 2.85, 2.9, seed).roof.kind);
+    kinds.add(planStreetBuilding(3.85, 2.85, 4.4, seed).roof.kind);
+  }
+  check('the street has both flat and pitched roofs', kinds.size === 2, [...kinds].join(', '));
+
+  // The same plot must always produce the same building, or the street would
+  // reshuffle itself every frame.
+  const a = planStreetBuilding(3.85, 2.85, 3.3, 42);
+  const b = planStreetBuilding(3.85, 2.85, 3.3, 42);
+  check('a plot is deterministic', JSON.stringify(a) === JSON.stringify(b));
 });
 
 // -------------------------------------------------------------- wall picking
