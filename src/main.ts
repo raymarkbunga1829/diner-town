@@ -1092,10 +1092,27 @@ function boot(): void {
 /** Cache the build so the game keeps working with no connection. */
 function registerServiceWorker(): void {
   if (!import.meta.env.PROD || !('serviceWorker' in navigator)) return;
+
+  // A tab that was already controlled is running the previous build. The worker
+  // claims its clients as soon as it activates, so that hand-over is the moment
+  // the new build is on disk and one reload picks it up. A first visit goes from
+  // no controller to a controller too, and must not reload out from under itself.
+  const wasControlled = !!navigator.serviceWorker.controller;
+  let reloading = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!wasControlled || reloading) return;
+    reloading = true;
+    location.reload();
+  });
+
   window.addEventListener('load', () => {
-    void navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`).catch(() => {
-      // Offline support is a bonus; a failed registration must not break play.
-    });
+    void navigator.serviceWorker
+      // `updateViaCache: 'none'` keeps the update check off the HTTP cache, so a
+      // stale copy of sw.js cannot be what decides there is nothing new.
+      .register(`${import.meta.env.BASE_URL}sw.js`, { updateViaCache: 'none' })
+      .catch(() => {
+        // Offline support is a bonus; a failed registration must not break play.
+      });
   });
 }
 
