@@ -24,3 +24,10 @@ jobs:
 
       - name: Headless checks
         run: npm run check
+
+      # Vercel builds main on its own schedule, so this reports on production
+      # rather than gating a commit on it: a pull request must never go red
+      # because a deploy has not landed yet.
+      - name: Is production serving this build?
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: npm run verify:shell -- https://diner-town.vercel.app dist/index.html
