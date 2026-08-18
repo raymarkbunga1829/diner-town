@@ -224,13 +224,13 @@ class App implements AppApi {
     this.save();
   }
 
-  /**
-   * The day's card. It never waits on the level-up card: if both land in the
-   * same frame the recap yields, because a level-up is the better moment and the
-   * recap is still there once it is dismissed.
-   */
+  /** Seconds to sit on a queued recap, so a level-up card gets the room first. */
   private recapHold = 0;
 
+  /**
+   * The day's card. A level-up landing in the same frame wins, because that is
+   * the better moment and the recap is still waiting once it is dismissed.
+   */
   private checkDayRecap(): void {
     const recap = this.game.pendingDayRecap;
     if (!recap) return;
@@ -463,11 +463,25 @@ class App implements AppApi {
   /** Report a command back to the player and keep the save honest. */
   private runCommand(result: CommandResult): void {
     this.toast(result.message, result.ok ? 'good' : result.kind);
-    if (!result.ok) {
-      audio.play('error');
+    if (result.ok) {
+      this.save();
       return;
     }
-    this.save();
+    audio.play('error');
+    // Pan to whatever is in the way if it is not already in shot, so being told
+    // to tap the dirty table does not turn into a hunt around the room.
+    if (result.at && !this.isOnScreen(result.at)) this.focusTile(result.at.tx, result.at.ty);
+  }
+
+  private isOnScreen(at: { tx: number; ty: number }, margin = 70): boolean {
+    const w = tileToWorld(at.tx + 0.5, at.ty + 0.5);
+    const p = this.camera.worldToScreen(w.x, w.y);
+    return (
+      p.x > margin &&
+      p.x < this.camera.viewW - margin &&
+      p.y > margin &&
+      p.y < this.camera.viewH - margin
+    );
   }
 
   private onBuildTap(): void {

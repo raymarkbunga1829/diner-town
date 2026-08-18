@@ -15,7 +15,8 @@ whole game is a single static bundle that saves to `localStorage`.
 |---|---|
 | **Pan** | Drag with one finger, or click and drag |
 | **Zoom** | Pinch, or scroll the mouse wheel |
-| **Place / select** | Tap a tile |
+| **Place / select** | Tap a tile in build mode |
+| **Give an order** | Tap a guest, a dirty table, a waiting plate or a tired worker |
 | **Shortcuts** | `B` build mode · `R` rotate · `G` grid · `F` recentre · `1`/`2`/`3` speed · `Esc` back |
 
 ### The loop
@@ -26,12 +27,25 @@ whole game is a single static bundle that saves to `localStorage`.
 4. The guest eats, pays, and leaves the table dirty. A **cleaner** wipes it so it can be reseated.
 5. Everyone has a patience meter. Run out of seats, stoves, staff or ingredients and people walk out, which hurts your rating.
 
+### Working the floor
+
+The team runs the room on its own, so the game keeps ticking over while you are
+in a panel or away from the tab. When you do want to intervene, tap what you
+want dealt with — including the marker floating above it:
+
+- **A guest at the door** walks to the nearest clean seat. If they cannot sit, the toast says why and rings the table that is in the way.
+- **A dirty table** pulls the nearest free hand over to wipe it, cleaners first, so energy and wages still count.
+- **A plate waiting on a counter or stove** is run out by the nearest free waiter, which is also how you unblock a kitchen with nowhere to put the next dish.
+- **A worker who has stopped** opens the team list where you can feed them.
+
 ### What drives progression
 
 - **Dish mastery.** Every serving earns a recipe experience. Each of the ten mastery levels adds 12% to the price and shaves a little off the cook time, so a focused menu cooked constantly beats a sprawling one.
 - **Star rating.** A weighted blend of Style (decor), Service (how fast you serve), Cleanliness (dirty tables) and Menu quality. It directly sets how often customers arrive, so it is the main dial you are turning.
 - **Restaurant level.** Earned by serving food; unlocks recipes, furniture, menu slots, staff positions and dining-room extensions up to 16x16.
 - **Staff.** Waiters, chefs and cleaners each have a skill level you can train and an energy bar that drains as they work. Wages come out of the till at the start of every in-game day.
+- **Regulars.** Eight named guests come back on their own cadence, each hoping for a particular dish drawn from your menu. Serve it to one of them while they are still in a good mood and they tip, hand over experience and return sooner; walk them out and it costs you twice over and they stay away. Manage lists who is due and what they are hoping for.
+- **The day recap.** Crossing into a new day brings up that day's card: covers, walkouts, dish takings, tips, wages owed against wages paid, and the one thing worth doing before tomorrow. Manage keeps the last day's figures next to the lifetime totals.
 
 ## Running it locally
 
