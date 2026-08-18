@@ -27,7 +27,16 @@ import { DAY_LENGTH, levelForXp, xpForLevel } from '../src/game/progression';
 import { buildDayRecap, suggestNextAction } from '../src/game/recap';
 import { favouriteFor, nextVisitDelay, refreshFavourite } from '../src/game/regulars';
 import { catchUpWhileAway, Simulation } from '../src/game/sim';
-import { createNewGame, Game, SAVE_KEY } from '../src/game/state';
+import {
+  BACKUP_KEY,
+  createNewGame,
+  Game,
+  importSaveText,
+  installSave,
+  SAVE_KEY,
+  SAVE_VERSION,
+  slotInfo,
+} from '../src/game/state';
 import type { Order, SaveData, Staff } from '../src/game/types';
 import { buildingBox } from '../src/render/renderer';
 import {
@@ -1022,6 +1031,217 @@ group("Reloading clears last shift's plates", () => {
     after.data.stats.customersServed > 0,
     `served ${after.data.stats.customersServed}`,
   );
+});
+
+// ------------------------------------------------------------ save transfer
+
+/** Stand up just enough `localStorage` to exercise the real save paths. */
+function stubStorage(): Map<string, string> {
+  const store = new Map<string, string>();
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: {
+      getItem: (k: string): string | null => store.get(k) ?? null,
+      setItem: (k: string, v: string): void => void store.set(k, v),
+      removeItem: (k: string): void => void store.delete(k),
+    },
+  });
+  return store;
+}
+
+group('A diner survives export and import', () => {
+  stubStorage();
+
+  // A diner with a history worth losing: a shift served, a regular with a
+  // record, and the room as the shift left it.
+  const before = new Game(createNewGame());
+  before.data.restaurantName = 'The Corner Spoon';
+  const sim = new Simulation(before);
+  const step = 1 / 20;
+  for (let i = 0; i < 20 * 240; i++) sim.update(step);
+  const tracked = before.data.regulars[0]!;
+  tracked.visits = 5;
+  tracked.delighted = 2;
+  tracked.favouriteDishId = 'crispy_fries';
+  check('the diner has something to lose', before.data.stats.customersServed > 0);
+  check('the save is written', before.save());
+
+  const text = before.exportText();
+  const expected = {
+    coins: before.data.coins,
+    xp: before.data.xp,
+    level: before.data.level,
+    clock: before.data.clock,
+    served: before.data.stats.customersServed,
+    room: before.data.placed.map((p) => `${p.uid}:${p.defId}:${p.tx},${p.ty}:${p.rot}`).join('|'),
+    menu: before.data.menu.join(','),
+  };
+  check('the export is text a player can keep', text.includes('"coins"') && text.includes('Corner Spoon'));
+
+  // The eviction the export exists for.
+  Game.wipe();
+  check('the live save can be lost', Game.load() === null);
+
+  // Whitespace a note or a text field adds around a paste must not matter.
+  const read = importSaveText(`\n  ${text}\n`);
+  check('the exported text imports', read.ok, read.ok ? '' : read.message);
+  if (!read.ok) return;
+
+  // A copy kept for days must not come back owing a shift for the time it spent
+  // sitting in that note.
+  read.game.data.savedAt = Date.now() - 3 * 24 * 3600 * 1000;
+  check('the import is stored', installSave(read.game.data));
+
+  const after = Game.load();
+  check('the imported diner loads', after !== null);
+  if (!after) return;
+  check('with the same coins', after.data.coins === expected.coins, `${after.data.coins} vs ${expected.coins}`);
+  check('the same experience and level', after.data.xp === expected.xp && after.data.level === expected.level);
+  check('the same time on the clock', after.data.clock === expected.clock);
+  check('the same name', after.data.restaurantName === 'The Corner Spoon');
+  check(
+    'the same room, piece for piece',
+    after.data.placed.map((p) => `${p.uid}:${p.defId}:${p.tx},${p.ty}:${p.rot}`).join('|') === expected.room,
+  );
+  check('the same menu', after.data.menu.join(',') === expected.menu);
+  check('the same lifetime figures', after.data.stats.customersServed === expected.served);
+
+  const same = after.data.regulars.find((r) => r.id === tracked.id);
+  check('the whole roster came back', after.data.regulars.length === REGULARS.length);
+  check(
+    'the regular kept their record',
+    same?.visits === 5 && same?.delighted === 2 && same?.favouriteDishId === 'crispy_fries',
+  );
+
+  check(
+    'a restored diner does not owe a missed shift',
+    Math.abs(Date.now() - after.data.savedAt) < 60_000,
+    `${(Date.now() - after.data.savedAt) / 1000}s old`,
+  );
+
+  // Import is the load path, so it has to migrate as well as parse: an old copy
+  // must come back with everything added since it was written.
+  const legacy = createNewGame();
+  legacy.version = 1;
+  legacy.placed[0]!.plates = [901];
+  delete (legacy as Partial<SaveData>).regulars;
+  const old = importSaveText(JSON.stringify(legacy));
+  check('an older exported save still imports', old.ok);
+  check('it is given the whole roster', old.ok && old.game.data.regulars.length === REGULARS.length);
+  check(
+    "and last shift's plates are dropped",
+    old.ok && old.game.data.placed.every((p) => (p.plates?.length ?? 0) === 0),
+  );
+  check('and it is stamped at the current version', old.ok && old.game.data.version === SAVE_VERSION);
+
+  // And it must be playable, not merely parsed.
+  if (old.ok) {
+    const resumed = new Simulation(old.game);
+    for (let i = 0; i < 20 * 240; i++) resumed.update(step);
+    check('an imported diner serves again', old.game.data.stats.customersServed > 0);
+  }
+});
+
+group('Bad text cannot replace a good diner', () => {
+  const store = stubStorage();
+
+  const game = new Game(createNewGame());
+  game.data.coins = 4242;
+  check('there is a good save to protect', game.save());
+  const good = store.get(SAVE_KEY)!;
+  const valid = game.exportText();
+
+  const rubbish: Array<[string, string]> = [
+    ['nothing at all', '   '],
+    ['prose', 'my diner was doing really well, please give it back'],
+    ['half a save', valid.slice(0, Math.floor(valid.length / 2))],
+    ['an empty object', '{}'],
+    ['a list', '[]'],
+    ['a null', 'null'],
+    ['a number', '12'],
+    ['a save with words for coins', JSON.stringify({ ...JSON.parse(valid), coins: 'lots' })],
+    ['a save with no coins at all', JSON.stringify({ ...JSON.parse(valid), coins: undefined })],
+    ['a save whose room is a word', JSON.stringify({ ...JSON.parse(valid), placed: 'none' })],
+    ['a save whose room holds nothing', JSON.stringify({ ...JSON.parse(valid), placed: [null] })],
+    ['a save whose team is a number', JSON.stringify({ ...JSON.parse(valid), staff: 3 })],
+    ['a save whose applicants are a word', JSON.stringify({ ...JSON.parse(valid), applicants: 'nobody' })],
+    ['a wall of text', 'x'.repeat(5_000_000)],
+  ];
+
+  for (const [label, payload] of rubbish) {
+    const read = importSaveText(payload);
+    check(`${label} is refused`, !read.ok);
+    check(`${label} says why in words`, read.ok || read.message.length > 12, read.ok ? '' : read.message);
+    check(`${label} leaves the stored save alone`, store.get(SAVE_KEY) === good);
+  }
+
+  const survivor = Game.load();
+  check('the good diner still loads after all that', survivor?.data.coins === 4242);
+  check('and its room is intact', (survivor?.data.placed.length ?? 0) > 0);
+});
+
+group('A replaced diner is not written back on the way out', () => {
+  stubStorage();
+
+  // Leaving the page autosaves, so the session on screen gets one last write
+  // after the player has already asked for a different diner. Without the seal
+  // that write lands on top of the import and nothing appears to have happened.
+  const live = new Game(createNewGame());
+  live.data.coins = 100;
+  check('the live diner is saved', live.save());
+
+  const incoming = new Game(createNewGame());
+  incoming.data.coins = 9000;
+  check('the import takes the slot', installSave(incoming.data));
+
+  live.seal();
+  check('a sealed diner refuses to write', !live.save());
+  check('the import survives the reload', Game.load()?.data.coins === 9000);
+
+  // Same story for starting over: the wipe has to still be a wipe afterwards.
+  const doomed = new Game(createNewGame());
+  check('there is a diner to delete', doomed.save());
+  Game.wipe();
+  doomed.seal();
+  doomed.save();
+  check('starting over stays started over', Game.load() === null);
+
+  // Sealing is about the live slot only, so a rescue copy can still be written.
+  check('a sealed diner can still be backed up', doomed.saveTo(BACKUP_KEY));
+});
+
+group('The backup slot is a second diner', () => {
+  const store = stubStorage();
+
+  const game = new Game(createNewGame());
+  game.data.coins = 7777;
+  game.data.restaurantName = 'Backup Diner';
+  check('the live save is written', game.save());
+  check('the backup is written', game.saveTo(BACKUP_KEY));
+  check('they are two separate slots', store.size === 2, `${store.size} keys`);
+
+  const info = slotInfo(BACKUP_KEY);
+  check('the slot can be described without loading it', info?.coins === 7777);
+  check('with the name on it', info?.restaurantName === 'Backup Diner');
+  check('and the day it holds', info?.day === game.dayNumber);
+  check('an empty slot describes nothing', slotInfo('diner-town/save/nothing-here') === null);
+
+  // Starting over clears the live key; the backup is the point of the exercise.
+  Game.wipe();
+  check('starting over clears the live save', Game.load() === null);
+  const kept = Game.loadSlot(BACKUP_KEY);
+  check('the backup is still there', kept?.data.coins === 7777);
+  check('and it is playable', !!kept && kept.usableSeatCount > 0);
+
+  // Restoring is a swap: the diner being replaced goes into the slot it came from.
+  if (kept) {
+    const outgoing = new Game(createNewGame());
+    outgoing.data.coins = 111;
+    check('the restored diner takes the live slot', installSave(kept.data));
+    check('the replaced diner takes the backup slot', outgoing.saveTo(BACKUP_KEY));
+    check('the live slot holds the restore', Game.load()?.data.coins === 7777);
+    check('the backup slot holds what it replaced', Game.loadSlot(BACKUP_KEY)?.data.coins === 111);
+  }
 });
 
 // ----------------------------------------------------------------- regulars

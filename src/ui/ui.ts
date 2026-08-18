@@ -2,7 +2,14 @@ import { audio } from '../engine/audio';
 import { clockLabel, levelProgress, MAX_LEVEL } from '../game/progression';
 import type { Game } from '../game/state';
 import type { DayRecap, RecapAction } from '../game/types';
-import type { AppApi, ConfirmOptions, Panel, PanelId } from './api';
+import type {
+  AppApi,
+  ConfirmOptions,
+  Panel,
+  PanelId,
+  TextExportOptions,
+  TextImportOptions,
+} from './api';
 import { clear, el, fmt, fmtShort, plural } from './dom';
 import { iconEl, iconSvg, starsHtml } from './icons';
 
@@ -407,6 +414,113 @@ export class UI {
         });
         requestAnimationFrame(() => input.focus());
         return node;
+      });
+    });
+  }
+
+  /**
+   * Hand the player their save as text. Copying and downloading are both offered
+   * because either can be unavailable — the clipboard needs a secure context and
+   * a download needs somewhere to put it — and the textarea itself is always
+   * there to select by hand.
+   */
+  showTextExport(opts: TextExportOptions): void {
+    this.showModal((close) => {
+      const area = el('textarea', {
+        class: 'field code',
+        rows: 7,
+        readonly: true,
+        spellcheck: 'false',
+        autocapitalize: 'off',
+        autocorrect: 'off',
+      });
+      area.value = opts.text;
+
+      const copy = async (): Promise<void> => {
+        area.focus();
+        area.select();
+        try {
+          const clip = navigator.clipboard;
+          if (!clip) throw new Error('no clipboard');
+          await clip.writeText(opts.text);
+          this.toast('Save copied — paste it somewhere safe', 'good');
+        } catch {
+          this.toast('Copying was blocked — the text is selected, copy it by hand', 'info');
+        }
+      };
+
+      const download = (): void => {
+        try {
+          const url = URL.createObjectURL(new Blob([opts.text], { type: 'application/json' }));
+          const link = el('a', { href: url, download: opts.filename });
+          link.click();
+          window.setTimeout(() => URL.revokeObjectURL(url), 4000);
+          this.toast(`Saved as ${opts.filename}`, 'good');
+        } catch {
+          this.toast('This browser would not download the file — copy the text instead', 'bad');
+        }
+      };
+
+      return el('div', { class: 'modal' }, [
+        el('h2', { text: opts.title }),
+        el('p', { text: opts.message }),
+        area,
+        el('div', { class: 'actions' }, [
+          el('button', { class: 'btn primary', text: 'Copy', onclick: () => void copy() }),
+          el('button', { class: 'btn', text: 'Download', onclick: download }),
+          el('button', { class: 'btn ghost', text: 'Done', onclick: close }),
+        ]),
+      ]);
+    });
+  }
+
+  /** Take a block of text back off the player, pasted or read out of a file. */
+  promptImportText(opts: TextImportOptions): Promise<string | null> {
+    return new Promise((resolve) => {
+      this.showModal((close) => {
+        const area = el('textarea', {
+          class: 'field code',
+          rows: 6,
+          spellcheck: 'false',
+          autocapitalize: 'off',
+          autocorrect: 'off',
+          placeholder: opts.placeholder ?? 'Paste your saved text here',
+        });
+        const picker = el('input', {
+          class: 'field file',
+          type: 'file',
+          accept: '.json,application/json,text/plain',
+        });
+        picker.addEventListener('change', () => {
+          const file = picker.files?.[0];
+          if (!file) return;
+          void file
+            .text()
+            .then((text) => {
+              area.value = text;
+              this.toast(`Read ${file.name}`, 'good');
+            })
+            .catch(() => this.toast('That file could not be read', 'bad'));
+        });
+
+        const done = (value: string | null): void => {
+          close();
+          resolve(value);
+        };
+        return el('div', { class: 'modal' }, [
+          el('h2', { text: opts.title }),
+          el('p', { text: opts.message }),
+          area,
+          picker,
+          el('div', { class: 'actions' }, [
+            el('button', { class: 'btn ghost', text: 'Cancel', onclick: () => done(null) }),
+            el('button', {
+              class: 'btn primary',
+              text: opts.confirmLabel ?? 'Continue',
+              onclick: () => done(area.value.trim() || null),
+            }),
+          ]),
+        ]);
       });
     });
   }

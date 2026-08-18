@@ -28,6 +28,12 @@ import type {
 } from './types';
 
 export const SAVE_KEY = 'diner-town/save/v1';
+/**
+ * The second slot. A copy in another key survives "Start over" and a mistaken
+ * import; it does not survive the browser throwing the origin's storage away,
+ * which is what exported text is for.
+ */
+export const BACKUP_KEY = 'diner-town/save/backup/v1';
 /** 2 added the regulars roster; `migrate` fills it in for anything older. */
 export const SAVE_VERSION = 2;
 
@@ -469,37 +475,56 @@ export class Game {
     return this.data;
   }
 
-  save(): void {
-    try {
-      localStorage.setItem(SAVE_KEY, JSON.stringify(this.serialise()));
-    } catch {
-      // Storage can be full or blocked (private browsing); the game still runs.
-    }
+  /**
+   * The whole diner as text the player can keep somewhere the browser cannot
+   * reach. Deliberately the same shape that goes into storage, so a save rescued
+   * out of developer tools by hand imports just as well as one exported here.
+   */
+  exportText(): string {
+    return JSON.stringify(this.serialise(), null, 2);
+  }
+
+  /** False when the write was refused, or when this game has been sealed. */
+  save(): boolean {
+    if (this.isSealed) return false;
+    return this.saveTo(SAVE_KEY);
+  }
+
+  private isSealed = false;
+
+  /** True once this game has given up its slot to another one. */
+  get sealed(): boolean {
+    return this.isSealed;
+  }
+
+  /**
+   * Stop this game writing to the live slot, for the moment before a reload that
+   * is meant to replace it. Leaving a page autosaves — `pagehide` and a hidden
+   * tab both do — and that write would put the diner being replaced straight back
+   * over a wipe or an import, so the one the player asked for never arrives.
+   */
+  seal(): void {
+    this.isSealed = true;
+  }
+
+  saveTo(key: string): boolean {
+    return writeSlot(key, JSON.stringify(this.serialise()));
   }
 
   static load(): Game | null {
-    let raw: string | null = null;
-    try {
-      raw = localStorage.getItem(SAVE_KEY);
-    } catch {
-      return null;
-    }
+    return Game.loadSlot(SAVE_KEY);
+  }
+
+  /** Load any slot through the same parse, validate and migrate path. */
+  static loadSlot(key: string): Game | null {
+    const raw = readSlot(key);
     if (!raw) return null;
-    try {
-      const parsed = JSON.parse(raw) as SaveData;
-      if (typeof parsed?.coins !== 'number' || !Array.isArray(parsed.placed)) return null;
-      return new Game(migrate(parsed));
-    } catch {
-      return null;
-    }
+    const read = importSaveText(raw);
+    return read.ok ? read.game : null;
   }
 
   static wipe(): void {
-    try {
-      localStorage.removeItem(SAVE_KEY);
-    } catch {
-      /* ignore */
-    }
+    clearSlot(SAVE_KEY);
   }
 
   get dayNumber(): number {
@@ -545,6 +570,153 @@ function migrate(data: SaveData): SaveData {
   }));
   merged.version = SAVE_VERSION;
   return merged;
+}
+
+// --------------------------------------------------------------- storage slots
+
+/**
+ * Reading `localStorage` at all can throw when an embedded browser has blocked
+ * it outright, so every touch of it goes through here.
+ */
+function slots(): Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> | null {
+  try {
+    return globalThis.localStorage ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export function readSlot(key: string): string | null {
+  try {
+    return slots()?.getItem(key) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** False when the write was refused, which is the player's cue to keep a copy. */
+export function writeSlot(key: string, text: string): boolean {
+  const store = slots();
+  if (!store) return false;
+  try {
+    store.setItem(key, text);
+    return true;
+  } catch {
+    // Quota exhausted, or storage blocked; the session carries on regardless.
+    return false;
+  }
+}
+
+export function clearSlot(key: string): boolean {
+  const store = slots();
+  if (!store) return false;
+  try {
+    store.removeItem(key);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// ------------------------------------------------------------ import / export
+
+/** Far longer than any real save, so a stray novel is refused before parsing. */
+const MAX_SAVE_TEXT = 4_000_000;
+
+export type SaveImport =
+  | { ok: true; game: Game }
+  | { ok: false; message: string };
+
+/**
+ * Turn pasted or stored text into a playable diner, or say why it cannot be one.
+ *
+ * This is the only way a save becomes a `Game`, storage included, so an imported
+ * copy goes through exactly the migration a reload does and a field added since
+ * it was written is filled in the same way. Nothing here writes anything: a
+ * payload that fails leaves the diner on screen untouched.
+ */
+export function importSaveText(text: string): SaveImport {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return { ok: false, message: 'There was nothing to read — paste your saved text first' };
+  }
+  if (trimmed.length > MAX_SAVE_TEXT) {
+    return { ok: false, message: 'That text is far too long to be a diner save' };
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return {
+      ok: false,
+      message: 'That is not a diner save — it looks like only part of the text was pasted',
+    };
+  }
+  if (!looksLikeSave(parsed)) {
+    return { ok: false, message: 'That text is valid data but not a diner save' };
+  }
+
+  // Migration and the constructor both walk the payload, and hand-edited or
+  // half-copied text can put something unexpected under any of those keys.
+  try {
+    return { ok: true, game: new Game(migrate(parsed)) };
+  } catch {
+    return { ok: false, message: 'That save is damaged and could not be opened' };
+  }
+}
+
+/**
+ * Enough of a smell test to tell a diner save from any other JSON, and to keep
+ * the migration off values it cannot walk. Everything a save gained after
+ * version 1 is deliberately not required — filling those in is `migrate`'s job.
+ */
+function looksLikeSave(value: unknown): value is SaveData {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const v = value as Partial<SaveData>;
+  if (typeof v.coins !== 'number' || !Number.isFinite(v.coins)) return false;
+  if (!Array.isArray(v.placed) || !Array.isArray(v.staff)) return false;
+  if (v.applicants !== undefined && !Array.isArray(v.applicants)) return false;
+  return true;
+}
+
+/**
+ * Put an imported save in a slot, stamped as saved now: the text may be days
+ * old, and a restored diner should pick up where it left off rather than owe a
+ * shift for the time the copy spent in a note.
+ */
+export function installSave(data: SaveData, key = SAVE_KEY): boolean {
+  data.savedAt = Date.now();
+  data.version = SAVE_VERSION;
+  return writeSlot(key, JSON.stringify(data));
+}
+
+/** What is in a slot, cheaply enough to label a button with. */
+export interface SaveSlotInfo {
+  restaurantName: string;
+  coins: number;
+  level: number;
+  day: number;
+  savedAt: number;
+}
+
+export function slotInfo(key: string): SaveSlotInfo | null {
+  const raw = readSlot(key);
+  if (!raw) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!looksLikeSave(parsed)) return null;
+  return {
+    restaurantName: parsed.restaurantName || 'Diner Town',
+    coins: parsed.coins,
+    level: typeof parsed.level === 'number' ? parsed.level : 1,
+    day: dayNumber(typeof parsed.clock === 'number' ? parsed.clock : 0),
+    savedAt: typeof parsed.savedAt === 'number' ? parsed.savedAt : 0,
+  };
 }
 
 export type { Customer, Order, Staff, Placed };

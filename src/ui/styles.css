@@ -942,6 +942,25 @@ button:not(:disabled),
   outline-offset: 1px;
 }
 
+/* Save text: small, monospaced and scrollable, so a whole diner fits in view. */
+.field.code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.4;
+  resize: vertical;
+  white-space: pre;
+  overflow: auto;
+}
+
+.field.file {
+  margin-top: 8px;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-dim);
+}
+
 /* -------------------------------------------------------------- tutorial */
 
 .coach {

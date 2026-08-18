@@ -55,6 +55,19 @@ what stops the team quietly satisfying a lesson before it has been read.
 are missing, so reading the Market and the Menu still introduces them without
 standing in for a shift.
 
+### Keeping your diner
+
+The game has no account, so the save lives in this browser's `localStorage` — and
+a browser can throw that away. **Manage → Settings → Your save** is the way out
+of that: **Copy save** hands you the whole diner as text to copy or download, and
+**Load a save** takes it back, from a paste or the downloaded file, on any browser
+or phone. Loading tells you whose diner is in the text before it replaces
+anything, refuses text that is not a save without touching the game you are
+playing, and puts the diner you were on into the **backup diner** slot — a second
+key in the same browser that also catches **Start over**. Imports go through the
+same migration a reload does, so a copy from an older build comes back with
+everything added since.
+
 ### What drives progression
 
 - **Dish mastery.** Every serving earns a recipe experience. Each of the ten mastery levels adds 12% to the price and shaves a little off the cook time, so a focused menu cooked constantly beats a sprawling one.
@@ -91,7 +104,10 @@ covers the things that are easiest to get subtly wrong — the isometric
 round-trip, picking a wall panel from a screen position, pathfinding and the
 "don't let the player seal off the doorway" rule, the mastery curve — and then
 runs four in-game minutes of the real simulation headlessly to confirm customers
-are actually seated, fed and charged. It also replays the onboarding coach the way
+are actually seated, fed and charged. It round-trips a played-in diner through
+export and import to prove the same coins, room and regulars come back, and
+throws a dozen kinds of rubbish at the importer to prove none of them can replace
+a good save. It also replays the onboarding coach the way
 the buttons drive it, to prove a game that only opens panels cannot finish it and
 one that serves and wipes can, and holds the shift you get for being away against
 twenty minutes of the shift you get for playing, so time away can never be the
