@@ -95,9 +95,9 @@ function renderOverview(app: AppApi, body: HTMLElement): void {
                 for (const p of displaced) {
                   const pieceDef = app.game.defOf(p);
                   if (pieceDef) app.game.earn(Math.floor(pieceDef.price * 0.55));
+                  app.sim.removeFixture(p);
                 }
                 if (displaced.length) {
-                  d.placed = d.placed.filter((p) => !displaced.includes(p));
                   app.toast('Wall decor in the new doorway was sold back to you', 'info');
                 }
                 app.game.touch();
