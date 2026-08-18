@@ -7,6 +7,9 @@
  * source with esbuild and asserts against it, rather than reimplementing logic.
  */
 
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+
 import { Camera } from '../src/engine/camera';
 import { NEIGHBOURS, TILE_H, TILE_W, TILE_Z, tileToWorld, worldToTile } from '../src/engine/iso';
 import { nearestActor } from '../src/game/pick';
@@ -83,6 +86,12 @@ function check(name: string, condition: boolean, detail = ''): void {
 function group(name: string, run: () => void): void {
   console.log(`\n${name}`);
   run();
+}
+
+/** `group` for checks that have to await something, like a cache lookup. */
+async function asyncGroup(name: string, run: () => Promise<void>): Promise<void> {
+  console.log(`\n${name}`);
+  await run();
 }
 
 // ---------------------------------------------------------------- projection
@@ -2686,6 +2695,468 @@ group('Service loop', () => {
     `  (served ${stats.customersServed}, lost ${stats.customersLost}, cooked ${stats.dishesCooked}, ` +
       `coins ${startingCoins} -> ${game.data.coins}, rating ${game.rating.toFixed(2)})`,
   );
+});
+
+// ---------------------------------------------------------------- cache policy
+
+/** Find a file in the repository, wherever the bundled checks are run from. */
+function repoFile(relative: string): string {
+  let dir = process.cwd();
+  for (let i = 0; i < 6; i++) {
+    const candidate = join(dir, relative);
+    if (existsSync(candidate)) return candidate;
+    dir = dirname(dir);
+  }
+  throw new Error(`could not find ${relative} at or above ${process.cwd()}`);
+}
+
+/** `repoFile` for something that only exists once the project has been built. */
+function builtFile(relative: string): string | null {
+  try {
+    return repoFile(relative);
+  } catch {
+    return null;
+  }
+}
+
+type Strategy = 'cache-first' | 'network-first';
+
+/** A request as the service worker reads one: url, method and mode, nothing else. */
+interface SwRequest {
+  url: string;
+  method: string;
+  mode: string;
+}
+
+/** Enough of the Cache API for the worker to run against, with no browser. */
+class FakeCache {
+  readonly entries = new Map<string, Response>();
+
+  constructor(private readonly base: string) {}
+
+  private key(request: string | SwRequest): string {
+    return new URL(typeof request === 'string' ? request : request.url, this.base).href;
+  }
+
+  async match(request: string | SwRequest): Promise<Response | undefined> {
+    const hit = this.entries.get(this.key(request));
+    return hit ? hit.clone() : undefined;
+  }
+
+  async put(request: string | SwRequest, response: Response): Promise<void> {
+    this.entries.set(this.key(request), response);
+  }
+
+  paths(): string[] {
+    return [...this.entries.keys()].map((href) => new URL(href).pathname).sort();
+  }
+}
+
+class FakeCacheStorage {
+  private readonly open_ = new Map<string, FakeCache>();
+
+  constructor(private readonly base: string) {}
+
+  async open(name: string): Promise<FakeCache> {
+    const existing = this.open_.get(name);
+    if (existing) return existing;
+    const created = new FakeCache(this.base);
+    this.open_.set(name, created);
+    return created;
+  }
+
+  async keys(): Promise<string[]> {
+    return [...this.open_.keys()];
+  }
+
+  async delete(name: string): Promise<boolean> {
+    return this.open_.delete(name);
+  }
+}
+
+/** A deploy the fake network is serving, keyed by path. */
+class FakeNetwork {
+  readonly files = new Map<string, string>();
+  readonly requested: string[] = [];
+  offline = false;
+
+  serve(files: Record<string, string>): void {
+    for (const [path, body] of Object.entries(files)) this.files.set(path, body);
+  }
+
+  since(): () => string[] {
+    const from = this.requested.length;
+    return () => this.requested.slice(from);
+  }
+}
+
+interface ServiceWorkerHarness {
+  cacheName: string;
+  strategyFor: (pathname: string, mode: string, scope?: string) => Strategy;
+  shellAssets: (html: string, base?: string) => string[];
+  storage: FakeCacheStorage;
+  lifecycle: (type: 'install' | 'activate') => Promise<void>;
+  /** The response the worker gave, or null if it let the request through. */
+  handle: (target: string, mode?: string, method?: string) => Promise<Response | null>;
+  respond: (target: string, mode?: string) => Promise<Response>;
+  claims: { skipWaiting: number; claim: number };
+}
+
+/**
+ * Run the real `public/sw.js` in this process. The worker only ever reaches the
+ * outside world through `self`, `caches` and `fetch`, so handing it three stand-ins
+ * is enough to ask it what it does with a request — and it stays the shipped file
+ * rather than a description of one.
+ */
+function loadServiceWorker(origin: string, scopePath: string, network: FakeNetwork): ServiceWorkerHarness {
+  const base = `${origin}${scopePath}`;
+  const source = readFileSync(repoFile('public/sw.js'), 'utf8');
+
+  const listeners = new Map<string, Array<(event: unknown) => void>>();
+  const storage = new FakeCacheStorage(base);
+  const claims = { skipWaiting: 0, claim: 0 };
+
+  const workerSelf = {
+    location: new URL(`${base}sw.js`),
+    registration: { scope: base },
+    addEventListener(type: string, listener: (event: unknown) => void): void {
+      const existing = listeners.get(type) ?? [];
+      existing.push(listener);
+      listeners.set(type, existing);
+    },
+    skipWaiting(): void {
+      claims.skipWaiting++;
+    },
+    clients: {
+      claim: async (): Promise<void> => {
+        claims.claim++;
+      },
+    },
+  };
+
+  const workerFetch = async (input: string | SwRequest): Promise<Response> => {
+    const url = new URL(typeof input === 'string' ? input : input.url, base);
+    network.requested.push(url.pathname);
+    if (network.offline) throw new TypeError('Failed to fetch');
+    const body = network.files.get(url.pathname);
+    if (body === undefined) return new Response('nothing here', { status: 404 });
+    return new Response(body, { status: 200 });
+  };
+
+  const load = new Function(
+    'self',
+    'caches',
+    'fetch',
+    `${source}\n;return { CACHE, strategyFor, shellAssets };`,
+  ) as (
+    self: unknown,
+    caches: unknown,
+    fetch: unknown,
+  ) => {
+    CACHE: string;
+    strategyFor: (pathname: string, mode: string, scope?: string) => Strategy;
+    shellAssets: (html: string, base?: string) => string[];
+  };
+
+  const exported = load(workerSelf, storage, workerFetch);
+
+  async function lifecycle(type: 'install' | 'activate'): Promise<void> {
+    const waiting: Array<Promise<unknown>> = [];
+    const event = { waitUntil: (work: Promise<unknown>) => waiting.push(work) };
+    for (const listener of listeners.get(type) ?? []) listener(event);
+    await Promise.all(waiting);
+  }
+
+  async function handle(target: string, mode = 'no-cors', method = 'GET'): Promise<Response | null> {
+    const waiting: Array<Promise<unknown>> = [];
+    const answers: Array<Promise<Response>> = [];
+    const event = {
+      request: { url: new URL(target, base).href, method, mode } satisfies SwRequest,
+      waitUntil: (work: Promise<unknown>) => waiting.push(work),
+      respondWith: (answer: Promise<Response>) => answers.push(Promise.resolve(answer)),
+    };
+    for (const listener of listeners.get('fetch') ?? []) listener(event);
+    if (answers.length === 0) return null;
+    const response = await answers[0];
+    // Writes the worker deferred with waitUntil have to land before the next look.
+    await Promise.all(waiting);
+    return response;
+  }
+
+  async function respond(target: string, mode = 'no-cors'): Promise<Response> {
+    const response = await handle(target, mode);
+    if (!response) throw new Error(`the worker passed ${target} through instead of answering it`);
+    return response;
+  }
+
+  return {
+    cacheName: exported.CACHE,
+    strategyFor: exported.strategyFor,
+    shellAssets: exported.shellAssets,
+    storage,
+    lifecycle,
+    handle,
+    respond,
+    claims,
+  };
+}
+
+/** A built shell, the way Vite writes one. */
+function builtShell(bundle: string, stylesheet: string): string {
+  return [
+    '<!doctype html><html><head>',
+    '<link rel="stylesheet" crossorigin href="https://fonts.googleapis.com/css2?family=Nunito">',
+    `<link rel="stylesheet" crossorigin href="${stylesheet}">`,
+    '<link rel="manifest" href="manifest.webmanifest">',
+    '<link rel="icon" href="icon.svg">',
+    `<script type="module" crossorigin src="${bundle}"></script>`,
+    '</head><body><canvas id="stage"></canvas></body></html>',
+  ].join('');
+}
+
+const SHELL_PATHS = ['/', '/index.html', '/sw.js', '/manifest.webmanifest'];
+
+await asyncGroup('Service worker routing', async () => {
+  const network = new FakeNetwork();
+  const sw = loadServiceWorker('https://diner-town.vercel.app', '/', network);
+
+  check(
+    'the cache name is no longer the one an old worker holds',
+    sw.cacheName !== 'diner-town-v1',
+    sw.cacheName,
+  );
+  check('the cache name is versioned', /^diner-town-v\d+$/.test(sw.cacheName), sw.cacheName);
+
+  // Anything whose URL survives a deploy has to be re-asked for.
+  for (const path of [...SHELL_PATHS, '/icon.svg', '/og.jpg', '/assets/unhashed.svg']) {
+    const strategy = sw.strategyFor(path, 'no-cors', '/');
+    check(`${path} is network-first`, strategy === 'network-first', strategy);
+  }
+  check('a navigation is network-first', sw.strategyFor('/', 'navigate', '/') === 'network-first');
+  check(
+    'a navigation to a hashed-looking path is still network-first',
+    sw.strategyFor('/assets/index-DlPaTXX-.js', 'navigate', '/') === 'network-first',
+  );
+
+  // Only Vite's fingerprinted output may be answered from the cache.
+  for (const path of [
+    '/assets/index-DlPaTXX-.js',
+    '/assets/index-a1b2c3d4.css',
+    '/assets/main-BAZf-ZBl.js',
+  ]) {
+    const strategy = sw.strategyFor(path, 'no-cors', '/');
+    check(`${path} is cache-first`, strategy === 'cache-first', strategy);
+  }
+
+  // The same rules have to hold from a GitHub Pages project subpath.
+  check(
+    'the shell under a Pages subpath is network-first',
+    SHELL_PATHS.every(
+      (path) =>
+        sw.strategyFor(`/diner-town${path}`, 'no-cors', '/diner-town/') === 'network-first',
+    ),
+  );
+  check(
+    'a hashed bundle under a Pages subpath is cache-first',
+    sw.strategyFor('/diner-town/assets/index-DlPaTXX-.js', 'no-cors', '/diner-town/') ===
+      'cache-first',
+  );
+
+  const found = sw.shellAssets(
+    builtShell('/assets/index-DlPaTXX-.js', '/assets/index-a1b2c3d4.css'),
+    'https://diner-town.vercel.app/',
+  );
+  check(
+    'the precache list is read off the shell',
+    found.includes('/assets/index-DlPaTXX-.js') && found.includes('/assets/index-a1b2c3d4.css'),
+    found.join(', '),
+  );
+  check(
+    'the precache list skips cross-origin and unhashed files',
+    found.length === 2,
+    found.join(', '),
+  );
+
+  const dist = builtFile('dist/index.html');
+  if (dist) {
+    const fromBuild = sw.shellAssets(readFileSync(dist, 'utf8'), 'https://diner-town.vercel.app/');
+    check(
+      'the real built shell yields a precache list',
+      fromBuild.some((path) => path.endsWith('.js')),
+      fromBuild.join(', '),
+    );
+  }
+});
+
+await asyncGroup('Service worker over a deploy', async () => {
+  const network = new FakeNetwork();
+  const yesterday = builtShell('/assets/index-OLD00001.js', '/assets/index-OLD00002.css');
+  network.serve({
+    '/': yesterday,
+    '/index.html': yesterday,
+    '/assets/index-OLD00001.js': 'the old bundle',
+    '/assets/index-OLD00002.css': 'the old stylesheet',
+    '/sw.js': 'the old worker',
+    '/manifest.webmanifest': '{"name":"Diner Town","short_name":"old"}',
+  });
+
+  const sw = loadServiceWorker('https://diner-town.vercel.app', '/', network);
+
+  // A shell an older worker left behind, which the bump has to evict.
+  const stale = await sw.storage.open('diner-town-v1');
+  await stale.put('/', new Response('a shell from last week'));
+
+  await sw.lifecycle('install');
+  await sw.lifecycle('activate');
+
+  check(
+    'installing warms the shell and the assets it names',
+    (await sw.storage.open(sw.cacheName)).paths().join(' ') ===
+      ['/', '/assets/index-OLD00001.js', '/assets/index-OLD00002.css', '/index.html'].join(' '),
+    (await sw.storage.open(sw.cacheName)).paths().join(' '),
+  );
+  check('activating deletes the old cache', !(await sw.storage.keys()).includes('diner-town-v1'));
+  check('the worker still skips waiting', sw.claims.skipWaiting > 0);
+  check('the worker still claims its clients', sw.claims.claim > 0);
+
+  // A session over the old deploy, which leaves a copy of each of these in the
+  // cache. Whether they are handed back next time is the whole question.
+  for (const path of ['/index.html', '/sw.js', '/manifest.webmanifest']) await sw.respond(path);
+
+  // A merge lands: same URLs, new contents.
+  const today = builtShell('/assets/index-NEW00001.js', '/assets/index-NEW00002.css');
+  network.serve({
+    '/': today,
+    '/index.html': today,
+    '/assets/index-NEW00001.js': 'the new bundle',
+    '/assets/index-NEW00002.css': 'the new stylesheet',
+    '/sw.js': 'the new worker',
+    '/manifest.webmanifest': '{"name":"Diner Town","short_name":"new"}',
+  });
+
+  const navigation = await sw.respond('/', 'navigate');
+  const served = await navigation.text();
+  check(
+    'a navigation after a deploy serves the new shell',
+    served.includes('index-NEW00001.js'),
+    served.includes('index-OLD00001.js') ? 'served the cached shell' : served.slice(0, 80),
+  );
+
+  // The three files the old worker was pinning forever.
+  for (const path of ['/index.html', '/sw.js', '/manifest.webmanifest']) {
+    const seen = network.since();
+    const body = await (await sw.respond(path)).text();
+    check(`${path} is fetched rather than replayed`, seen().includes(path), 'no request was made');
+    check(
+      `${path} answers with what the deploy is serving`,
+      body === network.files.get(path),
+      body.slice(0, 60),
+    );
+  }
+
+  // Hashed assets are the opposite promise: the cache wins, network untouched.
+  const seenAsset = network.since();
+  const cachedAsset = await (await sw.respond('/assets/index-OLD00001.js')).text();
+  check('a hashed asset is answered from the cache', cachedAsset === 'the old bundle', cachedAsset);
+  check('a cached hashed asset costs no request', seenAsset().length === 0, seenAsset().join(', '));
+
+  const fresh = await (await sw.respond('/assets/index-NEW00001.js')).text();
+  check('a hashed asset the cache has not seen is fetched', fresh === 'the new bundle', fresh);
+  await sw.respond('/assets/index-NEW00002.css');
+
+  // Cross-origin fonts and writes stay the browser's business.
+  check(
+    'a cross-origin request is passed through',
+    (await sw.handle('https://fonts.googleapis.com/css2?family=Nunito')) === null,
+  );
+  check('a POST is passed through', (await sw.handle('/', 'navigate', 'POST')) === null);
+
+  // Offline, everything the game needs to boot has to come out of the cache.
+  network.offline = true;
+  const offlineShell = await sw.respond('/', 'navigate');
+  const offlineHtml = await offlineShell.text();
+  check('the shell still answers offline', offlineShell.ok);
+  check(
+    'the shell served offline is the newest one seen online',
+    offlineHtml.includes('index-NEW00001.js'),
+    offlineHtml.slice(0, 80),
+  );
+  for (const path of ['/assets/index-NEW00001.js', '/assets/index-NEW00002.css']) {
+    const response = await sw.handle(path);
+    check(`${path} still loads offline`, !!response && response.ok);
+  }
+  const deepLink = await sw.respond('/never-visited', 'navigate');
+  check('an unvisited page falls back to the cached shell offline', deepLink.ok);
+
+  const refused = await sw
+    .respond('/assets/index-NEVER0001.js')
+    .then(() => false)
+    .catch(() => true);
+  check('an asset the cache never held fails offline rather than hanging', refused);
+});
+
+group('CDN cache headers', () => {
+  const config = JSON.parse(readFileSync(repoFile('vercel.json'), 'utf8')) as {
+    headers?: Array<{ source: string; headers: Array<{ key: string; value: string }> }>;
+  };
+  const rules = config.headers ?? [];
+  check('vercel.json sets response headers', rules.length > 0);
+
+  /** Vercel sources are literal paths here, give or take one `(.*)` wildcard. */
+  const asRegExp = (source: string): RegExp =>
+    new RegExp(
+      `^${source
+        .split('(.*)')
+        .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+        .join('(.*)')}$`,
+    );
+
+  const cacheControlFor = (path: string): string | null => {
+    let value: string | null = null;
+    for (const rule of rules) {
+      if (!asRegExp(rule.source).test(path)) continue;
+      for (const header of rule.headers) {
+        if (header.key.toLowerCase() === 'cache-control') value = header.value.toLowerCase();
+      }
+    }
+    return value;
+  };
+
+  check(
+    'every rule sets Cache-Control',
+    rules.every((rule) => rule.headers.some((h) => h.key.toLowerCase() === 'cache-control')),
+  );
+
+  /** Does this policy force a round trip before the bytes are reused? */
+  const revalidates = (value: string): boolean =>
+    /(^|[\s,])no-(store|cache)([\s,]|$)/.test(value) ||
+    (/max-age=0/.test(value) && /must-revalidate/.test(value));
+
+  for (const path of SHELL_PATHS) {
+    const value = cacheControlFor(path);
+    check(`${path} has a Cache-Control`, value !== null);
+    check(`${path} may not be reused without asking`, !!value && revalidates(value), value ?? 'unset');
+    check(`${path} is not marked immutable`, !(value ?? '').includes('immutable'), value ?? 'unset');
+  }
+
+  const assets = cacheControlFor('/assets/index-DlPaTXX-.js');
+  check('/assets/* is immutable', !!assets && assets.includes('immutable'), assets ?? 'unset');
+  const maxAge = Number(/max-age=(\d+)/.exec(assets ?? '')?.[1] ?? 0);
+  check('/assets/* is cached for a year', maxAge >= 31_536_000, String(maxAge));
+
+  // The worker and the CDN have to disagree about nothing: whatever one of them
+  // treats as immutable, the other has to as well.
+  const network = new FakeNetwork();
+  const sw = loadServiceWorker('https://diner-town.vercel.app', '/', network);
+  for (const path of [...SHELL_PATHS, '/assets/index-DlPaTXX-.js']) {
+    const immutable = (cacheControlFor(path) ?? '').includes('immutable');
+    const cacheFirst = sw.strategyFor(path, 'no-cors', '/') === 'cache-first';
+    check(
+      `${path}: the worker and the CDN agree`,
+      immutable === cacheFirst,
+      `header ${immutable ? 'immutable' : 'revalidates'}, worker ${cacheFirst ? 'cache-first' : 'network-first'}`,
+    );
+  }
 });
 
 console.log(
