@@ -7,6 +7,7 @@ import { REGULARS_BY_ID } from './data/regulars';
 import { Grid } from './grid';
 import { advanceAlongPath, findPath } from './path';
 import { appearanceFrom, randomName, workSpeed } from './people';
+import { buildDayRecap, emptyLedger } from './recap';
 import {
   nextVisitDelay,
   refreshFavourite,
@@ -74,6 +75,10 @@ export class Simulation {
   constructor(private readonly game: Game) {
     this.grid = new Grid(game);
     this.lastDay = game.dayNumber;
+    // A save can be reopened on a later day than its ledger was written for.
+    if (game.data.today.day !== this.lastDay) {
+      game.data.today = emptyLedger(this.lastDay);
+    }
   }
 
   update(realDt: number): void {
@@ -99,12 +104,13 @@ export class Simulation {
   private handleDayRollover(): void {
     const day = this.game.dayNumber;
     if (day === this.lastDay) return;
+    const closing = this.lastDay;
     this.lastDay = day;
     this.game.data.stats.daysOpen = day;
 
     const payroll = this.game.data.staff.reduce((sum, s) => sum + s.wage, 0);
+    const paid = Math.min(payroll, this.game.data.coins);
     if (payroll > 0) {
-      const paid = Math.min(payroll, this.game.data.coins);
       this.game.data.coins -= paid;
       this.game.data.stats.totalSpent += paid;
       this.game.addFloater(
@@ -117,8 +123,15 @@ export class Simulation {
         // Underpaid staff show up tired the next day.
         for (const s of this.game.data.staff) s.energy = Math.min(s.energy, 45);
       }
-      this.game.touch();
     }
+
+    // Built after payroll, so the card reports the till the player will wake up
+    // to rather than the one they went to bed with.
+    const ledger = { ...this.game.data.today, day: closing };
+    this.game.data.lastRecap = buildDayRecap(this.game, ledger, payroll, paid);
+    this.game.pendingDayRecap = this.game.data.lastRecap;
+    this.game.data.today = emptyLedger(day);
+    this.game.touch();
   }
 
   private handleRestock(): void {
@@ -385,6 +398,7 @@ export class Simulation {
     c.angry = true;
     c.satisfaction = 0.05;
     this.game.data.stats.customersLost++;
+    this.game.data.today.walkouts++;
     this.game.recordSatisfaction(0.05);
     this.game.addFloater(reason, c.tx, c.ty, 'bad');
     this.game.fx.puff(c.tx, c.ty, '#c6a493');
@@ -416,6 +430,8 @@ export class Simulation {
       this.game.earn(paid, { tx: c.tx, ty: c.ty });
       this.game.addXp(Math.round(dish.basePrice * 0.45) + 4, { tx: c.tx, ty: c.ty - 0.4 });
       this.game.data.stats.customersServed++;
+      this.game.data.today.covers++;
+      this.game.data.today.dishEarnings += paid;
       this.game.fx.coins(c.tx, c.ty, paid / 60);
       if (!this.game.data.settings.muted) audio.play('coin');
     }
@@ -461,6 +477,8 @@ export class Simulation {
       this.game.addXp(8);
       this.game.recordSatisfaction(1);
       this.game.fx.coins(c.tx, c.ty, tip / 40);
+      this.game.data.today.tips += tip;
+      this.game.data.today.regularsDelighted++;
       if (!this.game.data.settings.muted) audio.play('bell');
     }
 
@@ -476,6 +494,7 @@ export class Simulation {
 
     state.visits++;
     state.walkouts++;
+    this.game.data.today.regularsLost++;
     this.game.addFloater(`${shortName(def.name)} will remember that`, c.tx, c.ty - 1, 'bad');
     this.game.recordSatisfaction(0);
     state.nextVisitAt = this.game.data.clock + nextVisitDelay(def, 'snubbed');

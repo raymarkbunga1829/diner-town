@@ -21,6 +21,7 @@ import { Grid } from '../src/game/grid';
 import { findPath } from '../src/game/path';
 import { appearanceFrom } from '../src/game/people';
 import { DAY_LENGTH } from '../src/game/progression';
+import { buildDayRecap, suggestNextAction } from '../src/game/recap';
 import { favouriteFor, nextVisitDelay, refreshFavourite } from '../src/game/regulars';
 import { Simulation } from '../src/game/sim';
 import { createNewGame, Game, SAVE_KEY } from '../src/game/state';
@@ -689,6 +690,143 @@ group('Walking a regular out stings', () => {
     'they stay away longer than usual',
     target.nextVisitAt - game.data.clock > nextVisitDelay(REGULARS_BY_ID[target.id]!, 'fed'),
   );
+});
+
+// ---------------------------------------------------------------- day recap
+
+group('Crossing midnight produces a recap', () => {
+  const game = new Game(createNewGame());
+  const sim = new Simulation(game);
+  const payroll = game.data.staff.reduce((sum, s) => sum + s.wage, 0);
+
+  check('the day starts with an empty ledger', game.data.today.covers === 0 && game.data.today.day === 1);
+  check('there is nothing to report yet', game.pendingDayRecap === null);
+
+  const rolled = runUntil(sim, () => game.pendingDayRecap !== null, DAY_LENGTH + 60);
+  check('a day rolled over', rolled);
+  if (!rolled) return;
+
+  const recap = game.pendingDayRecap!;
+  check('it is the day that just ended', recap.day === 1, `day ${recap.day}`);
+  check('it is now day two', game.dayNumber === 2);
+  check('covers are real', recap.covers > 0, `${recap.covers}`);
+  check(
+    'covers match the shift that was served',
+    recap.covers === game.data.stats.customersServed,
+    `${recap.covers} vs ${game.data.stats.customersServed}`,
+  );
+  check(
+    'walkouts match the shift',
+    recap.walkouts === game.data.stats.customersLost,
+    `${recap.walkouts} vs ${game.data.stats.customersLost}`,
+  );
+  check('dish earnings are real coins', recap.dishEarnings > 0, `${recap.dishEarnings}`);
+  check(
+    'earnings never exceed what the till took',
+    recap.dishEarnings + recap.tips <= game.data.stats.totalEarned,
+  );
+  check('wages are the whole payroll', recap.wages === payroll, `${recap.wages} vs ${payroll}`);
+  check('a solvent diner pays them in full', recap.wagesPaid === recap.wages);
+  check('every figure is finite', [recap.covers, recap.walkouts, recap.dishEarnings, recap.tips, recap.wages, recap.wagesPaid].every(Number.isFinite));
+  check(
+    'the pantry warning agrees with the pantry',
+    (recap.pantryWarning !== null) === !game.menuCanCook(),
+    `warning ${recap.pantryWarning}, can cook ${game.menuCanCook()}`,
+  );
+  check('there is one thing to do next', recap.action.label.length > 0);
+  check(
+    'the suggestion points somewhere real',
+    recap.action.target === null ||
+      ['shop', 'menu', 'market', 'staff', 'build'].includes(recap.action.target),
+    `${recap.action.target}`,
+  );
+  check('the recap is kept for Manage', game.data.lastRecap?.day === 1);
+  check('the new day starts clean', game.data.today.day === 2 && game.data.today.covers === 0);
+
+  // Manage shows it after the card is dismissed, so it has to survive a reload.
+  game.save();
+  const reloaded = Game.load();
+  check('the recap comes back with the save', reloaded?.data.lastRecap?.day === 1);
+  check(
+    'with its figures intact',
+    reloaded?.data.lastRecap?.covers === recap.covers &&
+      reloaded?.data.lastRecap?.wages === recap.wages,
+  );
+  check('and its suggestion', reloaded?.data.lastRecap?.action.label === recap.action.label);
+
+  // A second day has to report only that day, not the whole run so far.
+  const firstCovers = recap.covers;
+  const again = runUntil(sim, () => game.data.lastRecap?.day === 2, DAY_LENGTH + 60);
+  check('a second recap arrives', again);
+  const second = game.data.lastRecap;
+  check('it covers day two', second?.day === 2, `day ${second?.day}`);
+  check(
+    'it counts only day two',
+    !!second && second.covers < game.data.stats.customersServed,
+    `${second?.covers} of ${game.data.stats.customersServed} lifetime`,
+  );
+  check(
+    'lifetime totals still add up',
+    game.data.stats.customersServed >= firstCovers + (second?.covers ?? 0),
+  );
+});
+
+group('The recap suggests the thing that is actually wrong', () => {
+  const empty = new Game(createNewGame());
+  empty.data.menu = [];
+  check('an empty menu is the first problem', suggestNextAction(empty, empty.data.today).target === 'menu');
+
+  const bare = new Game(createNewGame());
+  bare.data.pantry = {};
+  const restock = suggestNextAction(bare, bare.data.today);
+  check('an empty pantry sends you to the market', restock.target === 'market', restock.label);
+  check('it names what to buy', /beef|bread|lettuce|potato|butter/i.test(restock.label), restock.label);
+
+  const shut = new Game(createNewGame());
+  shut.data.open = false;
+  check('a closed diner is told to open', /open/i.test(suggestNextAction(shut, shut.data.today).label));
+
+  const chefless = new Game(createNewGame());
+  chefless.data.staff = chefless.data.staff.filter((s) => s.role !== 'chef');
+  const hireChef = suggestNextAction(chefless, chefless.data.today);
+  check('no chef means hire a chef', hireChef.target === 'staff' && /chef/i.test(hireChef.label), hireChef.label);
+
+  const tired = new Game(createNewGame());
+  tired.data.staff[0]!.state = 'exhausted';
+  const feed = suggestNextAction(tired, tired.data.today);
+  check('an exhausted team is fed first', feed.target === 'staff' && /feed/i.test(feed.label), feed.label);
+
+  const bleeding = new Game(createNewGame());
+  const busy = { ...bleeding.data.today, covers: 6, walkouts: 5 };
+  const hire = suggestNextAction(bleeding, busy);
+  check('walkouts point at a second waiter', /waiter/i.test(hire.label), hire.label);
+
+  const broke = new Game(createNewGame());
+  const short = suggestNextAction(broke, broke.data.today, { wages: 200, wagesPaid: 40 });
+  check('missed payroll is called out', short.target === 'staff', short.label);
+
+  const dry = new Game(createNewGame());
+  dry.data.pantry = {};
+  const warned = buildDayRecap(dry, dry.data.today, 100, 100);
+  check('a dry pantry warns on the card', !!warned.pantryWarning, `${warned.pantryWarning}`);
+  check('the warning says the kitchen cannot cook', /cannot cook/i.test(warned.pantryWarning ?? ''));
+});
+
+group('A ledger written on another day is not credited to today', () => {
+  const game = new Game(createNewGame());
+  game.data.today = { ...game.data.today, day: 1, covers: 12, dishEarnings: 400 };
+  game.data.clock = DAY_LENGTH * 4 + 10;
+
+  const sim = new Simulation(game);
+  check('the stale ledger was reset', game.data.today.covers === 0, `${game.data.today.covers}`);
+  check('it belongs to the current day', game.data.today.day === game.dayNumber);
+
+  // And a ledger for the day we are actually on survives being reopened.
+  const kept = new Game(createNewGame());
+  kept.data.today = { ...kept.data.today, day: 1, covers: 7 };
+  new Simulation(kept);
+  check('a current ledger is left alone', kept.data.today.covers === 7);
+  check('nothing was reported on load', sim !== null && game.pendingDayRecap === null);
 });
 
 // ------------------------------------------------------------ job interrupts

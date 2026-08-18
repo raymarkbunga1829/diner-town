@@ -5,9 +5,11 @@ import { DISHES_BY_ID, dishLevelFromServings, MAX_DISH_LEVEL } from './data/dish
 import { FURNITURE_BY_ID, type FurnitureDef } from './data/furniture';
 import { INGREDIENTS, INGREDIENT_LIST, type IngredientId } from './data/ingredients';
 import { appearanceFrom, makeApplicant } from './people';
+import { emptyLedger, normaliseLedger } from './recap';
 import { createRegulars, migrateRegulars } from './regulars';
 import {
   DAY_LENGTH,
+  dayNumber,
   levelForXp,
   MIN_GRID,
   menuCapacity,
@@ -16,6 +18,7 @@ import {
 import type {
   Applicant,
   Customer,
+  DayRecap,
   FloatingText,
   Order,
   Placed,
@@ -112,6 +115,8 @@ export function createNewGame(restaurantName = 'Diner Town'): SaveData {
       totalEarned: 0, totalSpent: 0, customersServed: 0,
       customersLost: 0, dishesCooked: 0, daysOpen: 1,
     },
+    today: emptyLedger(1),
+    lastRecap: null,
     settings: { muted: false, showGrid: false, speed: 1 },
     tutorialStep: 0,
     seenIntro: false,
@@ -138,6 +143,8 @@ export class Game {
 
   /** Set when the level changes so the UI can show a celebration. */
   pendingLevelUp: number | null = null;
+  /** Set when a day rolls over so the UI can show that day's card. */
+  pendingDayRecap: DayRecap | null = null;
   /** Bumped whenever persistent state changes, so panels can re-render lazily. */
   revision = 0;
 
@@ -469,6 +476,10 @@ function migrate(data: SaveData): SaveData {
   const merged: SaveData = { ...fresh, ...data };
   merged.settings = { ...fresh.settings, ...(data.settings ?? {}) };
   merged.stats = { ...fresh.stats, ...(data.stats ?? {}) };
+  // The clock is what says which day it is, so a ledger from any other day is
+  // stale and starts again rather than being credited to today.
+  merged.today = normaliseLedger(data.today, dayNumber(merged.clock ?? 0));
+  merged.lastRecap = data.lastRecap ?? null;
   merged.pantry = { ...(data.pantry ?? {}) };
   merged.marketStock = { ...fresh.marketStock, ...(data.marketStock ?? {}) };
   merged.dishXp = { ...(data.dishXp ?? {}) };

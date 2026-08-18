@@ -129,6 +129,25 @@ function renderOverview(app: AppApi, body: HTMLElement): void {
     ]),
   );
 
+  const recap = d.lastRecap;
+  if (recap) {
+    body.append(
+      el('div', { class: 'section-title', text: `Day ${recap.day}` }),
+      el('div', { class: 'card' }, [
+        kv('Covers served', fmt(recap.covers)),
+        kv('Walked out', fmt(recap.walkouts)),
+        kv('Dish takings', fmt(recap.dishEarnings + recap.tips)),
+        kv(
+          'Wages paid',
+          recap.wagesPaid < recap.wages
+            ? `${fmt(recap.wagesPaid)} of ${fmt(recap.wages)}`
+            : fmt(recap.wages),
+        ),
+        el('div', { class: 'desc', text: `Next: ${recap.action.label}` }),
+      ]),
+    );
+  }
+
   renderRegulars(app, body);
 
   body.append(

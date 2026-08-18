@@ -165,6 +165,40 @@ export interface Stats {
   daysOpen: number;
 }
 
+/**
+ * What has happened so far today. Persisted, so closing the tab at lunchtime
+ * does not wipe the morning out of the evening's recap.
+ */
+export interface DayLedger {
+  /** Day these figures belong to, so a stale ledger can be spotted. */
+  day: number;
+  covers: number;
+  walkouts: number;
+  /** Coins taken for food, before tips. */
+  dishEarnings: number;
+  /** Coins handed over on top by delighted regulars. */
+  tips: number;
+  regularsDelighted: number;
+  regularsLost: number;
+}
+
+/** The single thing the recap suggests doing next. */
+export interface RecapAction {
+  label: string;
+  /** Where the player is sent when they take it up. */
+  target: 'shop' | 'menu' | 'market' | 'staff' | 'build' | null;
+}
+
+/** A finished day, ready to be shown as a card. */
+export interface DayRecap extends DayLedger {
+  /** Wages owed for the day that just ended, and what could be covered. */
+  wages: number;
+  wagesPaid: number;
+  /** Set when nothing on the menu can be cooked with what is in the pantry. */
+  pantryWarning: string | null;
+  action: RecapAction;
+}
+
 export interface Settings {
   muted: boolean;
   showGrid: boolean;
@@ -195,6 +229,9 @@ export interface SaveData {
   regulars: RegularState[];
   serviceScore: number;
   stats: Stats;
+  today: DayLedger;
+  /** The last day's recap, so Manage can show it after the card is dismissed. */
+  lastRecap: DayRecap | null;
   settings: Settings;
   tutorialStep: number;
   seenIntro: boolean;

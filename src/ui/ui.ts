@@ -1,8 +1,9 @@
 import { audio } from '../engine/audio';
 import { clockLabel, levelProgress, MAX_LEVEL } from '../game/progression';
 import type { Game } from '../game/state';
+import type { DayRecap, RecapAction } from '../game/types';
 import type { AppApi, ConfirmOptions, Panel, PanelId } from './api';
-import { clear, el, fmtShort } from './dom';
+import { clear, el, fmt, fmtShort, plural } from './dom';
 import { iconEl, iconSvg, starsHtml } from './icons';
 
 interface DockItem {
@@ -328,9 +329,21 @@ export class UI {
 
   // ---------------------------------------------------------------- modals
 
+  private openModals = 0;
+
+  /** True while any card or dialog is up, so queued cards can wait their turn. */
+  get hasModal(): boolean {
+    return this.openModals > 0;
+  }
+
   private showModal(build: (close: () => void) => HTMLElement): void {
     const scrim = el('div', { class: 'modal-scrim' });
+    this.openModals++;
+    let closed = false;
     const close = (): void => {
+      if (closed) return;
+      closed = true;
+      this.openModals--;
       scrim.style.opacity = '0';
       window.setTimeout(() => scrim.remove(), 200);
     };
@@ -417,6 +430,89 @@ export class UI {
         ),
         el('div', { class: 'actions' }, [
           el('button', { class: 'btn primary', text: actionLabel, onclick: close }),
+        ]),
+      ]),
+    );
+  }
+
+  /**
+   * The end-of-day card. Same shape as the level-up modal, plus a warning line
+   * when the pantry is dry and a button that takes the player straight to the
+   * one thing worth doing before tomorrow.
+   */
+  showDayRecap(recap: DayRecap, onAction: (action: RecapAction) => void): void {
+    const takings = recap.dishEarnings + recap.tips;
+    const rows: Array<{ label: string; value: string; warn?: boolean }> = [
+      { label: 'Covers served', value: fmt(recap.covers) },
+      { label: 'Walked out', value: fmt(recap.walkouts), warn: recap.walkouts > 0 },
+      { label: 'Dish takings', value: fmt(recap.dishEarnings) },
+    ];
+    if (recap.tips > 0) {
+      rows.push({ label: 'Regulars’ tips', value: `+${fmt(recap.tips)}` });
+    }
+    rows.push({
+      label: 'Wages paid',
+      value: recap.wagesPaid < recap.wages
+        ? `${fmt(recap.wagesPaid)} of ${fmt(recap.wages)}`
+        : `-${fmt(recap.wages)}`,
+      warn: recap.wagesPaid < recap.wages,
+    });
+    rows.push({
+      label: 'Kept',
+      value: `${takings - recap.wagesPaid >= 0 ? '+' : ''}${fmt(takings - recap.wagesPaid)}`,
+      warn: takings - recap.wagesPaid < 0,
+    });
+
+    this.showModal((close) =>
+      el('div', { class: 'modal' }, [
+        el('h2', { text: `Day ${recap.day} is done` }),
+        el('p', {
+          text: recap.covers > 0
+            ? `${plural(recap.covers, 'cover')} served for ${fmt(takings)} coins.`
+            : 'Nobody was served today.',
+        }),
+        ...rows.map((r) =>
+          el('div', { class: 'kv' }, [
+            el('span', { text: r.label }),
+            el('span', {
+              text: r.value,
+              style: r.warn ? 'color:#b02820' : undefined,
+            }),
+          ]),
+        ),
+        recap.regularsDelighted > 0 || recap.regularsLost > 0
+          ? el('div', { class: 'kv' }, [
+              el('span', { text: 'Regulars' }),
+              el('span', {
+                text: `${recap.regularsDelighted} delighted · ${recap.regularsLost} walked out`,
+                style: recap.regularsLost > 0 ? 'color:#b02820' : undefined,
+              }),
+            ])
+          : null,
+        recap.pantryWarning
+          ? el('div', { class: 'card', style: 'margin-top:12px;border-color:var(--red)' }, [
+              el('div', { class: 'name', text: 'Pantry warning' }),
+              el('div', { class: 'desc', text: recap.pantryWarning }),
+            ])
+          : null,
+        el('div', { class: 'card', style: 'margin-top:12px' }, [
+          el('div', { class: 'name', text: 'Do this next' }),
+          el('div', { class: 'desc', text: recap.action.label }),
+        ]),
+        el('div', { class: 'actions' }, [
+          el('button', {
+            class: 'btn ghost',
+            text: 'Carry on',
+            onclick: close,
+          }),
+          el('button', {
+            class: 'btn primary',
+            text: recap.action.target ? 'Take me there' : 'Do it',
+            onclick: () => {
+              close();
+              onAction(recap.action);
+            },
+          }),
         ]),
       ]),
     );

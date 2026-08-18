@@ -174,7 +174,9 @@ class App implements AppApi {
     this.ctx.restore();
 
     this.ui.updateStatus();
+    this.recapHold = Math.max(0, this.recapHold - dt);
     this.checkLevelUp();
+    this.checkDayRecap();
     this.checkCoach();
     this.checkPantryCrisis();
 
@@ -204,6 +206,10 @@ class App implements AppApi {
     lines.push({ label: 'Menu slots', value: String(this.game.menuCapacity) });
     lines.push({ label: 'Staff positions', value: String(this.game.staffCapacity) });
 
+    // Long enough to cover the delay below, so a day rolling over in the same
+    // frame does not slide its card under the celebration.
+    this.recapHold = 1.4;
+
     // Let the confetti land before the card covers the room, otherwise the only
     // celebration the player ever sees is a scrim over the top of it.
     window.setTimeout(() => {
@@ -214,6 +220,28 @@ class App implements AppApi {
         'Back to work',
       );
     }, 750);
+    this.save();
+  }
+
+  /**
+   * The day's card. It never waits on the level-up card: if both land in the
+   * same frame the recap yields, because a level-up is the better moment and the
+   * recap is still there once it is dismissed.
+   */
+  private recapHold = 0;
+
+  private checkDayRecap(): void {
+    const recap = this.game.pendingDayRecap;
+    if (!recap) return;
+    // Something is already covering the room: hold the recap rather than
+    // stacking a second card on top of it.
+    if (this.recapHold > 0 || this.game.pendingLevelUp !== null || this.ui.hasModal) return;
+    this.game.pendingDayRecap = null;
+    audio.play('bell');
+    this.ui.showDayRecap(recap, (action) => {
+      if (action.target === 'build') this.enterBuild();
+      else if (action.target) this.openSheet(action.target);
+    });
     this.save();
   }
 
