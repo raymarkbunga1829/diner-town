@@ -211,6 +211,57 @@ class App implements AppApi {
     }
   }
 
+  /** The shift worked while the tab was shut, and the wait for the boot screen. */
+  private awayReport: TimeAwayReport | null = null;
+  private awayHold = 0.45;
+
+  /**
+   * Show what the team did while the tab was shut. The shift itself was worked on
+   * the way in — coins, stock, wages and the clock all moved through the same
+   * code a watched shift moves them through — so this only reports it. Whatever
+   * else it set off, a level or the day's card, queues up behind this one.
+   */
+  private checkTimeAway(dt: number): void {
+    const report = this.awayReport;
+    if (!report) return;
+    this.awayHold -= dt;
+    if (this.awayHold > 0) return;
+    this.awayReport = null;
+
+    const hours = Math.floor(report.awaySeconds / 3600);
+    const minutes = Math.round((report.awaySeconds % 3600) / 60);
+    const lines = [
+      { label: 'Time away', value: hours ? `${hours}h ${minutes}m` : `${minutes}m` },
+      { label: 'Covers served', value: fmt(report.covers) },
+      { label: 'Taken', value: fmt(report.takings) },
+      { label: 'Ingredients used', value: fmt(report.ingredients) },
+    ];
+    if (report.wages > 0) lines.push({ label: 'Wages paid', value: fmt(report.wages) });
+    lines.push({
+      label: 'In the till',
+      value: `${report.coins < 0 ? '-' : '+'}${fmt(Math.abs(report.coins))}`,
+    });
+    if (report.xp > 0) lines.push({ label: 'Experience', value: fmt(report.xp) });
+
+    // What the card is for is the difference between the takings and what they
+    // cost, because that is the part the old bonus quietly left out.
+    const body = [
+      report.pantryRanDry
+        ? 'Your team carried on without you until the pantry ran out, then locked up.'
+        : 'Your team carried on without you, cooking out of the pantry, and then locked up.',
+      report.daysRolled > 0 ? 'A day ended while you were gone, so payroll came out of the till.' : '',
+      report.walkouts > 0
+        ? `${report.walkouts} ${report.walkouts === 1 ? 'guest' : 'guests'} gave up waiting while the team was stretched.`
+        : '',
+      'A shift you work yourself is always worth more than one you miss.',
+    ]
+      .filter((line) => line.length > 0)
+      .join(' ');
+
+    this.ui.showInfoModal('While you were away', lines, body, 'Back to work');
+    this.save();
+  }
+
   private checkLevelUp(): void {
     const level = this.game.pendingLevelUp;
     if (level === null) return;
@@ -263,7 +314,7 @@ class App implements AppApi {
     // Something is already covering the room, or is about to: hold the recap
     // rather than stacking a second card on top of it.
     if (this.recapHold > 0 || this.game.pendingLevelUp !== null || this.ui.hasModal) return;
-    if (this.awayReport) return;
+    if (this.awayReport !== null) return;
     this.game.pendingDayRecap = null;
     audio.play('bell');
     this.ui.showDayRecap(recap, (action) => {
@@ -888,56 +939,6 @@ class App implements AppApi {
     this.game.save();
   }
 
-  /** The shift worked while the tab was shut, waiting for the boot screen to clear. */
-  private awayReport: TimeAwayReport | null = null;
-  private awayHold = 0.45;
-
-  /**
-   * Show what the team did while the tab was shut. The shift itself was worked on
-   * the way in — coins, stock, wages and the clock all moved through the same
-   * code a watched shift moves them through — so this only reports it. Whatever
-   * else it set off, a level or the day's card, queues up behind this one.
-   */
-  private checkTimeAway(dt: number): void {
-    const report = this.awayReport;
-    if (!report) return;
-    this.awayHold -= dt;
-    if (this.awayHold > 0) return;
-    this.awayReport = null;
-
-    const hours = Math.floor(report.awaySeconds / 3600);
-    const minutes = Math.round((report.awaySeconds % 3600) / 60);
-    const lines = [
-      { label: 'Time away', value: hours ? `${hours}h ${minutes}m` : `${minutes}m` },
-      { label: 'Covers served', value: fmt(report.covers) },
-      { label: 'Taken', value: fmt(report.takings) },
-      { label: 'Ingredients used', value: fmt(report.ingredients) },
-    ];
-    if (report.wages > 0) lines.push({ label: 'Wages paid', value: fmt(report.wages) });
-    lines.push({
-      label: 'In the till',
-      value: `${report.coins < 0 ? '-' : '+'}${fmt(Math.abs(report.coins))}`,
-    });
-    if (report.xp > 0) lines.push({ label: 'Experience', value: fmt(report.xp) });
-
-    // The point of the card is the difference between takings and cost, because
-    // that is the part the old "while you were away" bonus quietly left out.
-    const body = [
-      report.pantryRanDry
-        ? 'Your team carried on without you until the pantry ran out, then locked up.'
-        : 'Your team carried on without you, cooking out of the pantry, and then locked up.',
-      report.daysRolled > 0 ? 'A day ended while you were gone, so payroll came out of the till.' : '',
-      report.walkouts > 0
-        ? `${report.walkouts} ${report.walkouts === 1 ? 'guest' : 'guests'} gave up waiting while the team was stretched.`
-        : '',
-      'A shift you work yourself is always worth more than one you miss.',
-    ]
-      .filter((s) => s.length > 0)
-      .join(' ');
-
-    this.ui.showInfoModal('While you were away', lines, body, 'Back to work');
-    this.save();
-  }
 }
 
 /** Whether this guest has a bubble or a name plate floating over them. */
