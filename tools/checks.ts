@@ -32,6 +32,7 @@ import { appearanceFrom } from '../src/game/people';
 import {
   DAY_LENGTH,
   fameForStar,
+  fameTitle,
   levelForXp,
   MAX_LEVEL,
   menuCapacity,
@@ -1756,7 +1757,7 @@ group('Past the cap, experience becomes fame', () => {
     `${before} -> ${game.data.today.fame}`,
   );
 
-  // Every one of the first five stars has to be worth crossing.
+  // Every star with a catalogue row has to be worth crossing.
   for (const reward of STAR_REWARDS) {
     const brings = unlocksAtStar(reward.star);
     const perk = (reward.menuSlots ?? 0) + (reward.staffSlots ?? 0);
@@ -1792,6 +1793,180 @@ group('Past the cap, experience becomes fame', () => {
   check('stars carry on past the rewards', starsForFame(fameForStar(9)) === 9);
   check('fame below the first star is no star at all', starsForFame(fameForStar(1) - 1) === 0);
   check('junk fame is not a star', starsForFame(Number.NaN) === 0 && starsForFame(-5) === 0);
+});
+
+group('Five more stars past Diner of the Year', () => {
+  check(
+    'the track runs one to ten with no gaps',
+    STAR_REWARDS.map((r) => r.star).join(',') === '1,2,3,4,5,6,7,8,9,10',
+    STAR_REWARDS.map((r) => r.star).join(','),
+  );
+  check(
+    'no two stars share a title',
+    new Set(STAR_REWARDS.map((r) => r.title)).size === STAR_REWARDS.length,
+  );
+  check('and each one says what it is for', STAR_REWARDS.every((r) => r.note.trim().length > 0));
+
+  for (let star = 6; star <= 10; star++) {
+    const brings = unlocksAtStar(star);
+    check(
+      `star ${star} puts something on the recipe list or in the shop`,
+      brings.dishes.length + brings.furniture.length > 0,
+      JSON.stringify(brings),
+    );
+  }
+
+  // The faces of the band, on the same terms as the rest of the late roster.
+  const faces = REGULARS.filter((r) => (r.unlockStars ?? 0) >= 6);
+  check('a face or two arrive with the food', faces.length >= 1 && faces.length <= 2, `${faces.length}`);
+  for (const def of faces) {
+    check(`${def.id} waits for the level cap too`, def.unlockLevel === MAX_LEVEL);
+    check(`${def.id} drops in every three or four days`, def.cadenceDays >= 3 && def.cadenceDays <= 4);
+    check(`${def.id} has a look of their own`, Object.keys(def.look).length > 0);
+    check(
+      `${def.id} came for a dish out of their own band`,
+      def.tastes.some((id) => (DISHES_BY_ID[id]?.unlockStars ?? 0) >= 6),
+      def.tastes.join(', '),
+    );
+    check(
+      `${def.id} can still be fed off the middle of the menu`,
+      def.tastes.some((id) => {
+        const dish = DISHES_BY_ID[id];
+        return !!dish && dish.unlockLevel <= 16 && !dish.unlockStars;
+      }),
+      def.tastes.join(', '),
+    );
+  }
+
+  // Capacity is the one reward that compounds, so it is pinned star by star:
+  // two lifts on the whole fame track, never in the same breath.
+  const menuBumps = STAR_REWARDS.filter((r) => r.menuSlots).map((r) => r.star);
+  const staffBumps = STAR_REWARDS.filter((r) => r.staffSlots).map((r) => r.star);
+  check('the menu grows twice, once in the new band', menuBumps.join(',') === '2,7', menuBumps.join(','));
+  check('the payroll twice, on other stars', staffBumps.join(',') === '4,9', staffBumps.join(','));
+  check('never both at once', menuBumps.every((s) => !staffBumps.includes(s)));
+  check(
+    'and never by more than a slot at a time',
+    STAR_REWARDS.every((r) => (r.menuSlots ?? 0) <= 1 && (r.staffSlots ?? 0) <= 1),
+  );
+  for (let star = 0; star <= 12; star++) {
+    check(
+      `star ${star} allows exactly the menu slots it earned`,
+      menuCapacity(MAX_LEVEL, star) === 12 + menuBumps.filter((s) => s <= star).length,
+      `${menuCapacity(MAX_LEVEL, star)}`,
+    );
+    check(
+      `star ${star} allows exactly the staff it earned`,
+      staffCapacity(MAX_LEVEL, star) === 12 + staffBumps.filter((s) => s <= star).length,
+      `${staffCapacity(MAX_LEVEL, star)}`,
+    );
+  }
+  check(
+    'a runaway star count does not balloon the room',
+    menuCapacity(MAX_LEVEL, 999) === 14 && staffCapacity(MAX_LEVEL, 999) === 14,
+    `${menuCapacity(MAX_LEVEL, 999)} menu, ${staffCapacity(MAX_LEVEL, 999)} staff`,
+  );
+
+  // Past the tenth the star is only a score, and the catalogue says so by being
+  // empty rather than by promising something that is not there.
+  check('nothing claims a star past the tenth', !STAR_REWARDS.some((r) => r.star > 10));
+  for (let star = 11; star <= 20; star++) {
+    const brings = unlocksAtStar(star);
+    check(
+      `star ${star} promises nothing`,
+      brings.dishes.length + brings.furniture.length + brings.regulars.length === 0,
+      JSON.stringify(brings),
+    );
+  }
+  check('but the number keeps counting', starsForFame(fameForStar(40)) === 40);
+  check('and stops having a title to give', fameTitle(40) === fameTitle(10));
+});
+
+group('A diner at five stars grows into ten', () => {
+  const capped = () => new Game({
+    ...createNewGame(),
+    level: MAX_LEVEL,
+    xp: xpForLevel(MAX_LEVEL) + fameForStar(5),
+    fame: fameForStar(5),
+  });
+
+  const game = capped();
+  check('it opens as Diner of the Year', game.stars === 5, `${game.stars} stars`);
+  check('with the title to match', fameTitle(game.stars) === 'Diner of the Year', `${fameTitle(game.stars)}`);
+  const menuBefore = game.menuCapacity;
+  const staffBefore = game.staffCapacity;
+
+  const sixth = [...DISHES, ...FURNITURE].filter((i) => i.unlockStars === 6);
+  check('there is something waiting behind the sixth', sixth.length > 0);
+  check('and none of it is on offer yet', sixth.every((i) => !game.unlocked(i)));
+
+  game.pendingStarUp = null;
+  game.addXp(fameForStar(6) - fameForStar(5));
+
+  check('a shift of trading crossed into the sixth', game.stars === 6, `${game.stars} stars`);
+  check('the celebration is claimed', game.pendingStarUp === 6, `${game.pendingStarUp}`);
+  check('and the card has a name on it', fameTitle(game.stars) === 'Booked to the Weekend');
+  check('everything the star brought can be used today', sixth.every((i) => game.unlocked(i)));
+  const brings = unlocksAtStar(6);
+  check(
+    'the card names all of it',
+    sixth.every((i) => brings.dishes.includes(i.name) || brings.furniture.includes(i.name)),
+    JSON.stringify(brings),
+  );
+
+  // "Can be used today" means the recipe actually goes on the board.
+  const newDish = DISHES.find((d) => d.unlockStars === 6)!;
+  game.data.menu = game.data.menu.slice(0, game.menuCapacity - 1);
+  check('the new recipe goes straight on the menu', game.toggleMenu(newDish.id) === 'added');
+  check('and stays there', game.isOnMenu(newDish.id));
+
+  // The rest of the band, one star at a time.
+  for (let star = 7; star <= 10; star++) {
+    const arriving = [...DISHES, ...FURNITURE].filter((i) => i.unlockStars === star);
+    check(`star ${star} has something behind it`, arriving.length > 0);
+    check(`which is locked at star ${star - 1}`, arriving.every((i) => !game.unlocked(i)));
+
+    game.pendingStarUp = null;
+    game.addXp(fameForStar(star) - fameForStar(star - 1));
+
+    check(`star ${star} landed`, game.stars === star, `${game.stars} stars`);
+    check(`and asked for its card`, game.pendingStarUp === star, `${game.pendingStarUp}`);
+    check(`star ${star} handed the whole lot over`, arriving.every((i) => game.unlocked(i)));
+
+    const reward = STAR_REWARDS.find((r) => r.star === star);
+    check(`star ${star} has a title and a note to show`, !!reward && reward.note.length > 0);
+    const named = unlocksAtStar(star);
+    check(
+      `star ${star} names it on the card`,
+      arriving.every((i) => named.dishes.includes(i.name) || named.furniture.includes(i.name)),
+      JSON.stringify(named),
+    );
+  }
+
+  check('the whole band added one menu slot', game.menuCapacity === menuBefore + 1, `${game.menuCapacity}`);
+  check('and one position on the payroll', game.staffCapacity === staffBefore + 1, `${game.staffCapacity}`);
+
+  // A face from the band turns up once the star is there, and not before.
+  const face = REGULARS.filter((r) => (r.unlockStars ?? 0) >= 6)[0]!;
+  check(
+    'the new face is nowhere near a five-star diner',
+    !regularUnlocked(face, MAX_LEVEL, 5),
+  );
+  check('and is on the roster now', regularUnlocked(face, game.data.level, game.stars));
+
+  const famous = capped();
+  famous.data.fame = fameForStar(face.unlockStars ?? 10);
+  famous.data.menu = [...famous.data.menu, ...face.tastes.filter((id) => {
+    const dish = DISHES_BY_ID[id];
+    return !!dish && famous.unlocked(dish);
+  })].slice(0, famous.menuCapacity);
+  for (const r of famous.data.regulars) r.nextVisitAt = Number.MAX_SAFE_INTEGER;
+  famous.data.regulars.find((r) => r.id === face.id)!.nextVisitAt = 0;
+  check(
+    `${face.id} walks in once the star is earned`,
+    runUntil(new Simulation(famous), () => famous.customers.some((c) => c.regularId === face.id), 180),
+    'never turned up',
+  );
 });
 
 group('A level and a star in one helping are two cards, in that order', () => {
@@ -1870,6 +2045,17 @@ group('Fame is nowhere near a new diner', () => {
     'nothing behind a star is unlocked',
     [...DISHES, ...FURNITURE].filter((i) => i.unlockStars).every((i) => !fresh.unlocked(i)),
   );
+  check(
+    'not even the last five stars of it',
+    [...DISHES, ...FURNITURE].filter((i) => (i.unlockStars ?? 0) >= 6).every((i) => !fresh.unlocked(i)),
+  );
+  check(
+    'no face that fame brings in is on the roster',
+    REGULARS.filter((r) => r.unlockStars).every((r) => !regularUnlocked(r, fresh.data.level, fresh.stars)),
+  );
+  // What Manage reads to decide whether the fame track exists at all.
+  check('and Manage has no fame section to draw', !fresh.atLevelCap && fresh.data.fame <= 0);
+  check('nor a title to put on one', fameTitle(fresh.stars) === null);
 
   // Capacities on the way up are exactly what they always were.
   for (let level = 1; level <= MAX_LEVEL; level++) {
@@ -1894,7 +2080,7 @@ group('Fame is nowhere near a new diner', () => {
 
 group('The late faces wait for the food they came for', () => {
   const late = REGULARS.filter((r) => (r.unlockLevel ?? 1) > 1);
-  check('there are a couple of new faces', late.length >= 2 && late.length <= 3, `${late.length}`);
+  check('there is a handful of new faces', late.length >= 4 && late.length <= 6, `${late.length}`);
   check('they arrive at the far end of the climb', late.every((r) => (r.unlockLevel ?? 1) >= 17));
   check('on a slower cadence', late.every((r) => r.cadenceDays >= 3 && r.cadenceDays <= 4));
   check('with their own look', late.every((r) => Object.keys(r.look).length > 0));
@@ -1986,6 +2172,38 @@ group('Fame and the late unlocks survive a reload', () => {
   check('with the same fame', read.ok && read.game.data.fame === before.data.fame);
   check('and the same stars', read.ok && read.game.stars === 2);
   check('and the same menu', read.ok && read.game.data.menu.join(',') === before.data.menu.join(','));
+
+  // A diner that has been all the way to the end of the fame track makes the
+  // same trip, with the whole late band on board.
+  const famous = new Game({
+    ...createNewGame(),
+    level: MAX_LEVEL,
+    xp: xpForLevel(MAX_LEVEL) + fameForStar(10),
+    fame: fameForStar(10),
+  });
+  const lastDish = DISHES.find((d) => d.unlockStars === 10)!;
+  famous.data.menu = [...famous.data.menu, lastDish.id];
+  const trip = importSaveText(famous.exportText());
+  check('a ten-star diner exports and imports', trip.ok, trip.ok ? '' : trip.message);
+  check('with all ten stars', trip.ok && trip.game.stars === 10, trip.ok ? `${trip.game.stars}` : '');
+  check('the last recipe still unlocked', trip.ok && trip.game.unlocked(lastDish));
+  check('and still on the menu', trip.ok && trip.game.isOnMenu(lastDish.id));
+  check(
+    'and the room the whole track earned',
+    trip.ok && trip.game.menuCapacity === 14 && trip.game.staffCapacity === 14,
+    trip.ok ? `${trip.game.menuCapacity} menu, ${trip.game.staffCapacity} staff` : '',
+  );
+
+  // A roster written before the fame faces existed gains them rather than
+  // dropping the ones it does know about.
+  const shortRoster = createNewGame();
+  shortRoster.regulars = shortRoster.regulars.filter((r) => !REGULARS_BY_ID[r.id]?.unlockStars);
+  const gained = importSaveText(JSON.stringify(shortRoster));
+  check(
+    'an older roster picks up the faces fame brings in',
+    gained.ok && gained.game.data.regulars.length === REGULARS.length,
+    gained.ok ? `${gained.game.data.regulars.length} of ${REGULARS.length}` : '',
+  );
 
   // A save written before fame existed must load as a diner with none, rather
   // than one whose star count is NaN.
