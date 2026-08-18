@@ -238,12 +238,8 @@ export class Simulation {
   }
 
   private freeSeat(): Placed | null {
-    for (const chair of this.unclaimedSeats()) {
-      const table = this.grid.tableForChair(chair);
-      if (!table || table.dirty) continue;
-      return chair;
-    }
-    return null;
+    const open = new Set(this.grid.openSeats().map((chair) => chair.uid));
+    return this.unclaimedSeats().find((chair) => open.has(chair.uid)) ?? null;
   }
 
   // -------------------------------------------------------------- customers

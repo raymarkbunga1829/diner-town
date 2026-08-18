@@ -273,4 +273,15 @@ export class Grid {
   usableSeats(): Placed[] {
     return this.game.placedWithRole('chair').filter((chair) => this.isUsableSeat(chair));
   }
+
+  /**
+   * Usable seats whose table is clean, so a guest could be sat there right now.
+   * A dirty table takes its whole group offline until somebody wipes it.
+   */
+  openSeats(): Placed[] {
+    return this.usableSeats().filter((chair) => {
+      const table = this.tableForChair(chair);
+      return !!table && !table.dirty;
+    });
+  }
 }

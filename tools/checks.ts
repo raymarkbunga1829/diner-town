@@ -476,23 +476,9 @@ group('Serving and wiping is what moves the coach on', () => {
 
   // Stools nowhere near a table are not seats, and must not count as any.
   const before = grid.usableSeats().length;
-  let orphans = 0;
-  for (let y = 0; y < grid.size && orphans < 2; y++) {
-    for (let x = 0; x < grid.size && orphans < 2; x++) {
-      if (!grid.canPlace(FURNITURE_BY_ID.chair_stool!, x, y, 0)) continue;
-      const beside = NEIGHBOURS.some(([dx, dy]) => {
-        const p = grid.solidAt(x + dx, y + dy);
-        return !!p && game.defOf(p)?.role === 'table';
-      });
-      if (beside) continue;
-      game.data.placed.push({ uid: game.nextUid(), defId: 'chair_stool', tx: x, ty: y, rot: 0 });
-      game.touch();
-      grid.sync();
-      orphans++;
-    }
-  }
+  const orphans = addOrphanStools(game, grid, 2);
   check('two orphan stools were placed', orphans === 2);
-  check('the raw chair count went up', game.seatCount === 4 + orphans, `${game.seatCount}`);
+  check('the raw chair count went up', game.chairCount === 4 + orphans, `${game.chairCount}`);
   check('no new usable seats appeared', grid.usableSeats().length === before);
   coach = tapThroughCoach(game, grid, seen, coach);
   check('orphan stools do not satisfy the seating step', coach.step === SEATS_STEP);
@@ -558,6 +544,92 @@ function addSeatingGroup(game: Game, grid: Grid): boolean {
   }
   return false;
 }
+
+/**
+ * Drop up to `want` stools on tiles the shop would allow but no table touches —
+ * the fake seat a player builds by accident. Returns how many landed.
+ */
+function addOrphanStools(game: Game, grid: Grid, want: number): number {
+  let placed = 0;
+  for (let y = 0; y < grid.size && placed < want; y++) {
+    for (let x = 0; x < grid.size && placed < want; x++) {
+      if (!grid.canPlace(FURNITURE_BY_ID.chair_stool!, x, y, 0)) continue;
+      const beside = NEIGHBOURS.some(([dx, dy]) => {
+        const p = grid.solidAt(x + dx, y + dy);
+        return !!p && game.defOf(p)?.role === 'table';
+      });
+      if (beside) continue;
+      game.data.placed.push({ uid: game.nextUid(), defId: 'chair_stool', tx: x, ty: y, rot: 0 });
+      game.touch();
+      grid.sync();
+      placed++;
+    }
+  }
+  return placed;
+}
+
+// ------------------------------------------------------------- arrival rate
+
+group('Arrivals follow the seats a guest can actually use', () => {
+  const dinerWith = (change: (game: Game, grid: Grid) => void): Game => {
+    const game = new Game(createNewGame());
+    const grid = new Grid(game);
+    grid.sync();
+    change(game, grid);
+    return game;
+  };
+
+  const plain = dinerWith(() => {});
+  const base = plain.spawnInterval;
+  check('the starter diner has four usable seats', plain.usableSeatCount === 4, `${plain.usableSeatCount}`);
+
+  const stools = dinerWith((game, grid) => {
+    check('three orphan stools were placed', addOrphanStools(game, grid, 3) === 3);
+  });
+  check('the stools count as chairs', stools.chairCount === 7, `${stools.chairCount}`);
+  check('the stools are not seats', stools.usableSeatCount === 4, `${stools.usableSeatCount}`);
+  // Fake seats may cost the player Style, which only ever slows arrivals down, so
+  // "no faster than the plain diner" is the whole of the promise here.
+  check(
+    'orphan stools do not pull guests in any faster',
+    stools.spawnInterval >= base,
+    `${stools.spawnInterval.toFixed(2)}s against ${base.toFixed(2)}s`,
+  );
+
+  const roomier = dinerWith((game, grid) => {
+    check('a real seating group fits in the starter room', addSeatingGroup(game, grid));
+  });
+  check('the group is usable seating', roomier.usableSeatCount === 6, `${roomier.usableSeatCount}`);
+  check(
+    'a real table with chairs does pull guests in faster',
+    roomier.spawnInterval < base,
+    `${roomier.spawnInterval.toFixed(2)}s against ${base.toFixed(2)}s`,
+  );
+
+  // Dirt takes seats out of service, so the arrival rate has to follow it down
+  // rather than holding on to the seats the room had this morning.
+  const messy = dinerWith((game, grid) => {
+    addSeatingGroup(game, grid);
+    for (const t of game.placedWithRole('table')) t.dirty = true;
+    game.touch();
+  });
+  check('no seat is open while every table is dirty', messy.openSeatCount === 0);
+  check(
+    'a dirty room stops pulling a crowd in',
+    messy.spawnInterval > roomier.spawnInterval,
+    `${messy.spawnInterval.toFixed(2)}s against ${roomier.spawnInterval.toFixed(2)}s`,
+  );
+
+  // The rate is only half of it: the door itself has to ask the same question.
+  const stoolsOnly = dinerWith((game) => {
+    game.data.placed = game.data.placed.filter((p) => game.defOf(p)?.role !== 'table');
+    game.touch();
+  });
+  check('a diner with no tables has no seats', stoolsOnly.usableSeatCount === 0);
+  const sim = new Simulation(stoolsOnly);
+  const arrived = runUntil(sim, () => stoolsOnly.customers.length > 0, 120);
+  check('nobody turns up for a room of loose stools', !arrived);
+});
 
 // -------------------------------------------------------------- tap to help
 
