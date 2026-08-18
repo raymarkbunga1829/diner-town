@@ -16,12 +16,15 @@ import {
   MAX_DISH_LEVEL,
 } from '../src/game/data/dishes';
 import { FURNITURE_BY_ID } from '../src/game/data/furniture';
+import { REGULARS, REGULARS_BY_ID } from '../src/game/data/regulars';
 import { Grid } from '../src/game/grid';
 import { findPath } from '../src/game/path';
 import { appearanceFrom } from '../src/game/people';
+import { DAY_LENGTH } from '../src/game/progression';
+import { favouriteFor, nextVisitDelay, refreshFavourite } from '../src/game/regulars';
 import { Simulation } from '../src/game/sim';
 import { createNewGame, Game, SAVE_KEY } from '../src/game/state';
-import type { Order, Staff } from '../src/game/types';
+import type { Order, SaveData, Staff } from '../src/game/types';
 import { COACH_STEPS } from '../src/ui/tutorial';
 
 let failures = 0;
@@ -349,7 +352,7 @@ group('Tapping a dirty table sends somebody to wipe it', () => {
     id: 9001, name: 'Test Guest', look: appearanceFrom('check-guest'), state: 'eating',
     tx: table.tx, ty: table.ty, path: [], patience: 1, patienceDrainPerSec: 0,
     chairUid: null, tableUid: table.uid, dishId: null, orderId: null, timer: 99,
-    satisfaction: 1, angry: false, queueSlot: 0, spawnedAt: 0,
+    satisfaction: 1, angry: false, queueSlot: 0, spawnedAt: 0, regularId: null,
   });
   const occupied = sim.cleanTable(table);
   check('an occupied table is left alone', !occupied.ok && /sitting/i.test(occupied.message));
@@ -506,6 +509,185 @@ group("Reloading clears last shift's plates", () => {
     'the reloaded diner serves again',
     after.data.stats.customersServed > 0,
     `served ${after.data.stats.customersServed}`,
+  );
+});
+
+// ----------------------------------------------------------------- regulars
+
+group('The regulars roster', () => {
+  const game = new Game(createNewGame());
+  const roster = game.data.regulars;
+
+  check('the roster is a handful', REGULARS.length >= 6 && REGULARS.length <= 10, `${REGULARS.length}`);
+  check('a new game starts with all of them', roster.length === REGULARS.length);
+  check('ids are unique', new Set(REGULARS.map((r) => r.id)).size === REGULARS.length);
+  check('names are unique', new Set(REGULARS.map((r) => r.name)).size === REGULARS.length);
+  check(
+    'every taste is a real dish',
+    REGULARS.every((r) => r.tastes.length > 0 && r.tastes.every((id) => !!DISHES_BY_ID[id])),
+  );
+  check('everyone comes back at some cadence', REGULARS.every((r) => r.cadenceDays >= 1));
+  check('nobody starts overdue', roster.every((r) => r.nextVisitAt > 0));
+  check(
+    'the first one is due inside the opening day',
+    Math.min(...roster.map((r) => r.nextVisitAt)) < DAY_LENGTH,
+  );
+
+  // The favourite has to come from the player's menu, not from a fixed order.
+  for (const def of REGULARS) {
+    const favourite = favouriteFor(def, game.data.menu);
+    check(
+      `${def.name} wants something on the menu`,
+      !!favourite && game.data.menu.includes(favourite),
+      `got ${favourite}`,
+    );
+  }
+  const burgerFan = REGULARS.find((r) => r.tastes[0] === 'house_burger')!;
+  check('a listed taste wins when it is on the menu', favouriteFor(burgerFan, ['garden_salad', 'house_burger']) === 'house_burger');
+  check('a menu without their taste still gives them one', !!favouriteFor(burgerFan, ['choc_cake']));
+  check('an empty menu leaves them without one', favouriteFor(burgerFan, []) === null);
+
+  const state = roster[0]!;
+  state.favouriteDishId = 'house_burger';
+  refreshFavourite(state, ['garden_salad']);
+  check('dropping their dish re-points them at the menu', state.favouriteDishId !== 'house_burger');
+
+  const def = REGULARS_BY_ID[roster[0]!.id]!;
+  check(
+    'a delighted regular comes back sooner than a fed one',
+    nextVisitDelay(def, 'delighted') < nextVisitDelay(def, 'fed'),
+  );
+  check(
+    'a snubbed regular stays away longer',
+    nextVisitDelay(def, 'snubbed') > nextVisitDelay(def, 'fed'),
+  );
+});
+
+group('Regulars survive a reload', () => {
+  const store = new Map<string, string>();
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: {
+      getItem: (k: string): string | null => store.get(k) ?? null,
+      setItem: (k: string, v: string): void => void store.set(k, v),
+      removeItem: (k: string): void => void store.delete(k),
+    },
+  });
+
+  const before = new Game(createNewGame());
+  const tracked = before.data.regulars[0]!;
+  tracked.visits = 4;
+  tracked.delighted = 3;
+  tracked.walkouts = 1;
+  tracked.favouriteDishId = 'crispy_fries';
+  tracked.nextVisitAt = 1234.5;
+  before.save();
+
+  const after = Game.load();
+  check('the save reloads', after !== null);
+  if (!after) return;
+
+  const same = after.data.regulars.find((r) => r.id === tracked.id);
+  check('the regular came back', !!same);
+  check('their history came back', same?.visits === 4 && same?.delighted === 3 && same?.walkouts === 1);
+  check('their favourite came back', same?.favouriteDishId === 'crispy_fries');
+  check('their next visit came back', same?.nextVisitAt === 1234.5);
+  check('the rest of the roster is intact', after.data.regulars.length === REGULARS.length);
+
+  // A save written before regulars existed must not break, and must not be
+  // handed a roster that is already halfway through its visits.
+  const legacy = createNewGame();
+  delete (legacy as Partial<SaveData>).regulars;
+  store.set(SAVE_KEY, JSON.stringify(legacy));
+  const migrated = Game.load();
+  check('an older save still loads', migrated !== null);
+  check('it is given the whole roster', migrated?.data.regulars.length === REGULARS.length);
+  check('with a clean history', migrated?.data.regulars.every((r) => r.visits === 0) === true);
+
+  // Junk in the save must not survive into the game either.
+  store.set(
+    SAVE_KEY,
+    JSON.stringify({
+      ...createNewGame(),
+      regulars: [{ id: 'nobody-by-that-name', visits: 9 }, { id: REGULARS[0]!.id, visits: 2, favouriteDishId: 'not_a_dish' }],
+    }),
+  );
+  const cleaned = Game.load();
+  check('unknown regulars are dropped', cleaned?.data.regulars.every((r) => !!REGULARS_BY_ID[r.id]) === true);
+  check('a stale favourite is forgotten', cleaned?.data.regulars.every((r) => r.favouriteDishId === null || !!DISHES_BY_ID[r.favouriteDishId]) === true);
+  check(
+    'a known regular keeps their count',
+    cleaned?.data.regulars.find((r) => r.id === REGULARS[0]!.id)?.visits === 2,
+  );
+});
+
+group('A regular walks in, is served and books again', () => {
+  const game = new Game(createNewGame());
+  const sim = new Simulation(game);
+  const target = game.data.regulars[0]!;
+  const def = REGULARS_BY_ID[target.id]!;
+
+  // Everyone else stays away, so the next face through the door is the one we
+  // are watching.
+  for (const r of game.data.regulars) r.nextVisitAt = Number.MAX_SAFE_INTEGER;
+  target.nextVisitAt = 0;
+
+  const arrived = runUntil(sim, () => game.customers.some((c) => c.regularId === target.id), 120);
+  check('the regular showed up', arrived);
+  if (!arrived) return;
+
+  const guest = game.customers.find((c) => c.regularId === target.id)!;
+  check('they are recognisable by name', guest.name === def.name);
+  check('they have their own look', guest.look.shirt === def.look.shirt);
+  check('their favourite was resolved from the menu', !!target.favouriteDishId &&
+    game.data.menu.includes(target.favouriteDishId));
+  check('they are not due again while still inside', target.nextVisitAt > 0);
+  check(
+    'the arrival is announced',
+    game.floaters.some((f) => f.text.includes(def.name.split(' ')[0]!)),
+  );
+
+  const bookedOnArrival = target.nextVisitAt;
+  const served = runUntil(sim, () => target.visits > 0, 240);
+  check('the visit finished', served, `visits ${target.visits}`);
+  check('they asked for their favourite', guest.dishId === target.favouriteDishId,
+    `ordered ${guest.dishId}, wanted ${target.favouriteDishId}`);
+  check('a well-served regular is delighted', target.delighted === 1 && target.walkouts === 0);
+  check('being delighted brings them back sooner', target.nextVisitAt < bookedOnArrival);
+  check('they are booked in for another visit', target.nextVisitAt > game.data.clock);
+
+  // And the second visit really does happen.
+  target.nextVisitAt = game.data.clock;
+  check(
+    'they come back',
+    runUntil(sim, () => game.customers.some((c) => c.regularId === target.id), 180),
+    'never returned',
+  );
+});
+
+group('Walking a regular out stings', () => {
+  const game = new Game(createNewGame());
+  const sim = new Simulation(game);
+  const target = game.data.regulars[0]!;
+  for (const r of game.data.regulars) r.nextVisitAt = Number.MAX_SAFE_INTEGER;
+  target.nextVisitAt = 0;
+
+  const arrived = runUntil(sim, () => game.customers.some((c) => c.regularId === target.id), 120);
+  check('the regular showed up', arrived);
+  if (!arrived) return;
+
+  const guest = game.customers.find((c) => c.regularId === target.id)!;
+  const service = game.data.serviceScore;
+  guest.patience = 0.0001;
+  runUntil(sim, () => target.walkouts > 0, 60);
+
+  check('the walkout was recorded against them', target.walkouts === 1, `${target.walkouts}`);
+  check('it did not count as a delight', target.delighted === 0);
+  check('the visit still counted', target.visits === 1);
+  check('service took the hit', game.data.serviceScore < service);
+  check(
+    'they stay away longer than usual',
+    target.nextVisitAt - game.data.clock > nextVisitDelay(REGULARS_BY_ID[target.id]!, 'fed'),
   );
 });
 

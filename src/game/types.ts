@@ -61,6 +61,26 @@ export interface Customer {
   /** Set while the customer is queueing, so queue slots stay stable. */
   queueSlot: number;
   spawnedAt: number;
+  /** Roster id when this guest is a regular, rather than a one-off walk-in. */
+  regularId: string | null;
+}
+
+/**
+ * A named guest who keeps coming back. Unlike walk-ins this outlives the
+ * session, so the player can build a relationship with them.
+ */
+export interface RegularState {
+  /** Matches a `RegularDef.id` from the roster. */
+  id: string;
+  /** Dish they ask for, resolved against the player's menu. */
+  favouriteDishId: string | null;
+  /** In-game clock time at which they are next due through the door. */
+  nextVisitAt: number;
+  visits: number;
+  /** Visits where they got their favourite while still in a good mood. */
+  delighted: number;
+  /** Visits they walked out of. */
+  walkouts: number;
 }
 
 export type OrderState = 'queued' | 'cooking' | 'ready' | 'collected';
@@ -172,6 +192,7 @@ export interface SaveData {
   nextRestockAt: number;
   menu: string[];
   dishXp: Record<string, number>;
+  regulars: RegularState[];
   serviceScore: number;
   stats: Stats;
   settings: Settings;

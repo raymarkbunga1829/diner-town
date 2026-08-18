@@ -5,6 +5,7 @@ import { DISHES_BY_ID, dishLevelFromServings, MAX_DISH_LEVEL } from './data/dish
 import { FURNITURE_BY_ID, type FurnitureDef } from './data/furniture';
 import { INGREDIENTS, INGREDIENT_LIST, type IngredientId } from './data/ingredients';
 import { appearanceFrom, makeApplicant } from './people';
+import { createRegulars, migrateRegulars } from './regulars';
 import {
   DAY_LENGTH,
   levelForXp,
@@ -23,7 +24,8 @@ import type {
 } from './types';
 
 export const SAVE_KEY = 'diner-town/save/v1';
-export const SAVE_VERSION = 1;
+/** 2 added the regulars roster; `migrate` fills it in for anything older. */
+export const SAVE_VERSION = 2;
 
 /** Market restocks on this cadence (in-game seconds). */
 export const RESTOCK_INTERVAL = 90;
@@ -104,6 +106,7 @@ export function createNewGame(restaurantName = 'Diner Town'): SaveData {
     nextRestockAt: RESTOCK_INTERVAL,
     menu: ['house_burger', 'crispy_fries', 'garden_salad'],
     dishXp: {},
+    regulars: createRegulars(),
     serviceScore: 0.72,
     stats: {
       totalEarned: 0, totalSpent: 0, customersServed: 0,
@@ -470,6 +473,9 @@ function migrate(data: SaveData): SaveData {
   merged.marketStock = { ...fresh.marketStock, ...(data.marketStock ?? {}) };
   merged.dishXp = { ...(data.dishXp ?? {}) };
   merged.menu = Array.isArray(data.menu) ? data.menu.filter((id) => DISHES_BY_ID[id]) : fresh.menu;
+  // Saves written before regulars existed have none; those written after may be
+  // missing anyone added to the roster since.
+  merged.regulars = migrateRegulars(data.regulars);
   // Plates hold order ids, but orders are session-only and are never written to
   // the save, so every id that comes back from disk points at nothing. Left in
   // place they are unreachable — only `releaseOrderHold` clears a plate and it

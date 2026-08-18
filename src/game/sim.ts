@@ -3,11 +3,18 @@ import { audio } from '../engine/audio';
 import { DISHES_BY_ID, dishCookTime, dishPrice } from './data/dishes';
 import type { FurnitureDef } from './data/furniture';
 import { INGREDIENT_LIST } from './data/ingredients';
+import { REGULARS_BY_ID } from './data/regulars';
 import { Grid } from './grid';
 import { advanceAlongPath, findPath } from './path';
 import { appearanceFrom, randomName, workSpeed } from './people';
+import {
+  nextVisitDelay,
+  refreshFavourite,
+  regularLook,
+  shortName,
+} from './regulars';
 import { RESTOCK_INTERVAL, type Game } from './state';
-import type { Customer, Order, Placed, Staff, StaffRole } from './types';
+import type { Customer, Order, Placed, RegularState, Staff, StaffRole } from './types';
 
 /** A position in tile space, used to pick the nearest surface to work from. */
 interface Point {
@@ -151,17 +158,22 @@ export class Simulation {
   private spawnCustomer(): void {
     const id = this.game.nextId();
     const style = this.game.styleScore;
+    const regular = this.dueRegular();
+    const def = regular ? REGULARS_BY_ID[regular.id] : undefined;
+    const doorX = this.game.data.doorX;
+
     const c: Customer = {
       id,
-      name: randomName(this.game.rng),
-      look: appearanceFrom(`guest-${id}-${Math.floor(this.game.data.clock)}`),
+      name: def ? def.name : randomName(this.game.rng),
+      look: def ? regularLook(def) : appearanceFrom(`guest-${id}-${Math.floor(this.game.data.clock)}`),
       state: 'entering',
-      tx: this.game.data.doorX,
+      tx: doorX,
       ty: -2.4,
-      path: [[this.game.data.doorX, 0]],
+      path: [[doorX, 0]],
       patience: 1,
-      // Pleasant surroundings make people notably more forgiving.
-      patienceDrainPerSec: 1 / (34 + style * 34),
+      // Pleasant surroundings make people notably more forgiving, and somebody
+      // who chose to come back is more forgiving still.
+      patienceDrainPerSec: 1 / ((34 + style * 34) * (def ? 1.2 : 1)),
       chairUid: null,
       tableUid: null,
       dishId: null,
@@ -171,8 +183,37 @@ export class Simulation {
       angry: false,
       queueSlot: this.game.customers.filter((x) => x.state === 'queueing').length,
       spawnedAt: this.game.data.clock,
+      regularId: regular?.id ?? null,
     };
     this.game.customers.push(c);
+
+    if (regular && def) {
+      refreshFavourite(regular, this.game.data.menu);
+      // Booked forward on arrival as well as on the way out, so a guest who is
+      // still inside can never be spawned a second time.
+      regular.nextVisitAt = this.game.data.clock + nextVisitDelay(def, 'fed');
+      this.game.addFloater(`${shortName(def.name)} is back!`, doorX, -1, 'info');
+      this.game.touch();
+    }
+  }
+
+  /** The regular who is furthest overdue and not already in the room. */
+  private dueRegular(): RegularState | null {
+    const clock = this.game.data.clock;
+    const inside = new Set(
+      this.game.customers.map((c) => c.regularId).filter((id): id is string => id !== null),
+    );
+    let best: RegularState | null = null;
+    for (const r of this.game.data.regulars) {
+      if (r.nextVisitAt > clock || inside.has(r.id) || !REGULARS_BY_ID[r.id]) continue;
+      if (!best || r.nextVisitAt < best.nextVisitAt) best = r;
+    }
+    return best;
+  }
+
+  private regularOf(c: Customer): RegularState | undefined {
+    if (c.regularId === null) return undefined;
+    return this.game.data.regulars.find((r) => r.id === c.regularId);
   }
 
   private usableSeats(): Placed[] {
@@ -251,7 +292,7 @@ export class Simulation {
       case 'deciding': {
         c.timer -= dt;
         if (c.timer > 0) break;
-        const dish = this.chooseDish();
+        const dish = this.dishFor(c);
         if (!dish) {
           this.giveUp(c, 'Nothing on the menu!');
           break;
@@ -308,6 +349,19 @@ export class Simulation {
     c.ty += (targetY - c.ty) * Math.min(1, dt * 3);
   }
 
+  /**
+   * What this guest orders. A regular asks for their favourite whenever the
+   * kitchen can produce it, which is what makes keeping that dish stocked and on
+   * the menu worth doing.
+   */
+  private dishFor(c: Customer): string | null {
+    const favourite = this.regularOf(c)?.favouriteDishId;
+    if (favourite && this.game.data.menu.includes(favourite) && this.game.canCook(favourite)) {
+      return favourite;
+    }
+    return this.chooseDish();
+  }
+
   /** Pick a dish from the menu, favouring appealing ones we can actually cook. */
   private chooseDish(): string | null {
     const options = this.game.data.menu.filter((id) => DISHES_BY_ID[id] && this.game.canCook(id));
@@ -335,6 +389,7 @@ export class Simulation {
     this.game.addFloater(reason, c.tx, c.ty, 'bad');
     this.game.fx.puff(c.tx, c.ty, '#c6a493');
     if (!this.game.data.settings.muted) audio.play('unhappy');
+    if (c.regularId !== null) this.snubRegular(c);
     this.cancelOrderFor(c);
     if (c.tableUid !== null) {
       const table = this.game.placedByUid(c.tableUid);
@@ -349,13 +404,14 @@ export class Simulation {
 
   private finishMeal(c: Customer): void {
     const dish = c.dishId ? DISHES_BY_ID[c.dishId] : undefined;
+    let paid = 0;
     if (dish) {
       const level = this.game.dishLevel(dish.id);
       const chair = c.chairUid !== null ? this.game.placedByUid(c.chairUid) : undefined;
       const comfort = chair ? (this.game.defOf(chair)?.comfort ?? 1) : 1;
       const mood = 0.7 + 0.55 * c.patience;
       const style = 1 + this.game.styleScore * 0.3;
-      const paid = Math.max(1, Math.round(dishPrice(dish, level) * comfort * mood * style));
+      paid = Math.max(1, Math.round(dishPrice(dish, level) * comfort * mood * style));
 
       this.game.earn(paid, { tx: c.tx, ty: c.ty });
       this.game.addXp(Math.round(dish.basePrice * 0.45) + 4, { tx: c.tx, ty: c.ty - 0.4 });
@@ -366,6 +422,7 @@ export class Simulation {
 
     c.satisfaction = 0.25 + 0.75 * c.patience;
     this.game.recordSatisfaction(c.satisfaction);
+    if (c.regularId !== null) this.settleRegular(c, paid);
 
     if (c.tableUid !== null) {
       const table = this.game.placedByUid(c.tableUid);
@@ -375,6 +432,54 @@ export class Simulation {
       }
     }
     this.sendHome(c);
+  }
+
+  /*
+   * A regular's visit has to be able to go well or badly, otherwise they are
+   * just a walk-in with a name. Getting their favourite in front of them while
+   * they are still in a good mood pays a tip and counts for more towards the
+   * service score than one cover would; letting them walk out costs the same
+   * score twice over and pushes their next visit well out.
+   */
+
+  private settleRegular(c: Customer, paid: number): void {
+    const state = this.regularOf(c);
+    const def = state ? REGULARS_BY_ID[state.id] : undefined;
+    if (!state || !def) return;
+
+    state.visits++;
+    const delighted =
+      state.favouriteDishId !== null &&
+      c.dishId === state.favouriteDishId &&
+      c.patience > 0.45;
+
+    if (delighted) {
+      state.delighted++;
+      const tip = Math.max(5, Math.round(paid * 0.35));
+      this.game.earn(tip, { tx: c.tx, ty: c.ty - 0.5 });
+      this.game.addFloater(`${shortName(def.name)}'s favourite!`, c.tx, c.ty - 1, 'coin');
+      this.game.addXp(8);
+      this.game.recordSatisfaction(1);
+      this.game.fx.coins(c.tx, c.ty, tip / 40);
+      if (!this.game.data.settings.muted) audio.play('bell');
+    }
+
+    state.nextVisitAt =
+      this.game.data.clock + nextVisitDelay(def, delighted ? 'delighted' : 'fed');
+    this.game.touch();
+  }
+
+  private snubRegular(c: Customer): void {
+    const state = this.regularOf(c);
+    const def = state ? REGULARS_BY_ID[state.id] : undefined;
+    if (!state || !def) return;
+
+    state.visits++;
+    state.walkouts++;
+    this.game.addFloater(`${shortName(def.name)} will remember that`, c.tx, c.ty - 1, 'bad');
+    this.game.recordSatisfaction(0);
+    state.nextVisitAt = this.game.data.clock + nextVisitDelay(def, 'snubbed');
+    this.game.touch();
   }
 
   private sendHome(c: Customer): void {
@@ -880,7 +985,7 @@ export class Simulation {
 
     // Stock may have moved since the guest decided; fall back to anything cookable.
     let dishId = c.dishId;
-    if (!dishId || !this.game.canCook(dishId)) dishId = this.chooseDish();
+    if (!dishId || !this.game.canCook(dishId)) dishId = this.dishFor(c);
     if (!dishId) {
       this.giveUp(c, 'Out of ingredients!');
       this.resetStaff(s);

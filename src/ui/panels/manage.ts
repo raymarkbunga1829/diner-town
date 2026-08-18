@@ -1,10 +1,19 @@
 import { audio } from '../../engine/audio';
-import { canExpand, expansionCost, expansionLevel, MAX_GRID } from '../../game/progression';
+import { DISHES_BY_ID } from '../../game/data/dishes';
+import { REGULARS_BY_ID } from '../../game/data/regulars';
+import {
+  canExpand,
+  DAY_LENGTH,
+  expansionCost,
+  expansionLevel,
+  MAX_GRID,
+} from '../../game/progression';
+import { favouriteFor, regularLook } from '../../game/regulars';
 import { Game } from '../../game/state';
 import type { AppApi, Panel } from '../api';
-import { el, fmt } from '../dom';
+import { el, fmt, plural } from '../dom';
 import { iconSvg } from '../icons';
-import { chip, meter } from './common';
+import { chip, meter, personIcon } from './common';
 
 type Tab = 'overview' | 'ratings' | 'settings';
 
@@ -120,6 +129,8 @@ function renderOverview(app: AppApi, body: HTMLElement): void {
     ]),
   );
 
+  renderRegulars(app, body);
+
   body.append(
     el('div', { class: 'section-title', text: 'Lifetime figures' }),
     el('div', { class: 'card' }, [
@@ -137,6 +148,56 @@ function renderOverview(app: AppApi, body: HTMLElement): void {
       ),
     ]),
   );
+}
+
+/**
+ * Who keeps coming back, what they hope to be served and when they are next
+ * due. The favourite is the actionable part: it is drawn from the current menu,
+ * so dropping a dish quietly changes what a regular will ask for.
+ */
+function renderRegulars(app: AppApi, body: HTMLElement): void {
+  const g = app.game;
+  const roster = g.data.regulars
+    .filter((r) => REGULARS_BY_ID[r.id])
+    .sort((a, b) => a.nextVisitAt - b.nextVisitAt);
+  if (!roster.length) return;
+
+  const list = el('div', { class: 'list' });
+  for (const state of roster) {
+    const def = REGULARS_BY_ID[state.id]!;
+    const favourite = state.favouriteDishId ?? favouriteFor(def, g.data.menu);
+    const dish = favourite ? DISHES_BY_ID[favourite] : undefined;
+    const onMenu = !!favourite && g.data.menu.includes(favourite);
+    const due = state.nextVisitAt - g.data.clock;
+    const days = due / DAY_LENGTH;
+
+    list.append(
+      el('div', { class: 'row-item', style: 'align-items:flex-start' }, [
+        personIcon(regularLook(def), 46),
+        el('div', { class: 'row-main' }, [
+          el('div', { class: 'row-title' }, [
+            el('span', { text: def.name }),
+            due <= 0
+              ? chip('Due now', 'good')
+              : chip(days < 1 ? 'Due today' : `In ${Math.round(days)} days`, 'info'),
+          ]),
+          el('div', {
+            class: 'row-sub',
+            text: dish
+              ? `Hopes for ${dish.name}${onMenu ? '' : ' — not on your menu'}`
+              : 'Put something on the menu and they will find a favourite',
+          }),
+          el('div', {
+            class: 'row-sub',
+            text: `${plural(state.visits, 'visit')} · ${state.delighted} delighted · ${state.walkouts} walked out`,
+          }),
+          el('div', { class: 'row-sub', style: 'margin-top:4px', text: def.note }),
+        ]),
+      ]),
+    );
+  }
+
+  body.append(el('div', { class: 'section-title', text: 'Regulars' }), list);
 }
 
 function renderRatings(app: AppApi, body: HTMLElement): void {
