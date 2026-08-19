@@ -65,7 +65,7 @@ import {
 import type { Appearance, Order, SaveData, Staff, StaffRole } from '../src/game/types';
 import { buildingBox } from '../src/render/renderer';
 import { planeOrigin, planStreetBuilding, roofSeam } from '../src/render/scenery';
-import { diamondCorners, faces, shade } from '../src/render/shapes';
+import { diamondCorners, faces, ink, shade } from '../src/render/shapes';
 import { drawPerson, type PersonOptions } from '../src/render/sprites';
 import { nextCelebration } from '../src/ui/cards';
 import {
@@ -1143,13 +1143,34 @@ group('A tap on the pixels a guest is drawn at seats that guest', () => {
 
 // ------------------------------------------------------------------- figures
 
-/** One fill or stroke a sprite made: the colour, and the box it covered. */
+/**
+ * One fill or stroke a sprite made: the colour, the box it covered, and whether
+ * any part of the path that made it was a curve rather than a straight edge.
+ */
 interface Paint {
   color: string;
   minX: number;
   minY: number;
   maxX: number;
   maxY: number;
+  curved: boolean;
+}
+
+/**
+ * A stand-in for a canvas gradient that remembers its stops. The soft top-to-
+ * bottom ramp across a rounded volume is a gradient, not a flat fill, so without
+ * this a check would see a person painted in no colours at all.
+ */
+class RecordedRamp {
+  readonly stops: string[] = [];
+
+  addColorStop(_at: number, color: string): void {
+    this.stops.push(color);
+  }
+
+  toString(): string {
+    return `ramp(${this.stops.join(' ')})`;
+  }
 }
 
 /**
@@ -1157,9 +1178,10 @@ interface Paint {
  * goes through the same transform stack the browser would apply, so a shape
  * drawn on a skewed plane is recorded where it actually lands on the canvas.
  *
- * This is what lets the checks below ask whether a person is built out of solid
- * volumes — several shades of the same colour, in a stack of small boxes — rather
- * than out of one flat disc with a face on it.
+ * This is what lets the checks below ask whether a person is built out of rounded
+ * volumes with weight to them — soft ramps, a lit crown, a shaded flank and a
+ * dark line round the silhouette — rather than out of hard-edged boxes or one
+ * flat disc with a face on it.
  */
 class Recorder {
   readonly fills: Paint[] = [];
@@ -1238,15 +1260,20 @@ class Recorder {
   quadraticCurveTo(cx: number, cy: number, x: number, y: number): void {
     this.at(cx, cy);
     this.at(x, y);
+    this.curve();
   }
 
-  arcTo(x1: number, y1: number, x2: number, y2: number, _r: number): void {
+  arcTo(x1: number, y1: number, x2: number, y2: number, r: number): void {
     this.at(x1, y1);
     this.at(x2, y2);
+    // A zero radius is a plain corner, which is worth telling apart from a
+    // rounded one: it is how a check can spot a box pretending to be soft.
+    if (r > 0) this.curve();
   }
 
   arc(x: number, y: number, r: number, _a0?: number, _a1?: number, _ccw?: boolean): void {
     this.box(x, y, r, r);
+    this.curve();
   }
 
   ellipse(
@@ -1260,6 +1287,7 @@ class Recorder {
     _ccw?: boolean,
   ): void {
     this.box(x, y, rx, ry);
+    this.curve();
   }
 
   rect(x: number, y: number, w: number, h: number): void {
@@ -1296,8 +1324,8 @@ class Recorder {
     return { addColorStop: () => undefined };
   }
 
-  createLinearGradient(): { addColorStop: () => void } {
-    return { addColorStop: () => undefined };
+  createLinearGradient(): RecordedRamp {
+    return new RecordedRamp();
   }
 
   /** The box every recorded fill and stroke together covers. */
@@ -1309,6 +1337,7 @@ class Recorder {
       minY: Math.min(...all.map((p) => p.minY)),
       maxX: Math.max(...all.map((p) => p.maxX)),
       maxY: Math.max(...all.map((p) => p.maxY)),
+      curved: all.every((p) => p.curved),
     };
   }
 
@@ -1322,12 +1351,17 @@ class Recorder {
       minY: Math.min(...hits.map((p) => p.minY)),
       maxX: Math.max(...hits.map((p) => p.maxX)),
       maxY: Math.max(...hits.map((p) => p.maxY)),
+      curved: hits.every((p) => p.curved),
     };
   }
 
   private at(x: number, y: number): void {
     const [a, b, c, d, e, f] = this.m as [number, number, number, number, number, number];
     this.grow(a * x + c * y + e, b * x + d * y + f);
+  }
+
+  private curve(): void {
+    if (this.path) this.path.curved = true;
   }
 
   private box(x: number, y: number, rx: number, ry: number): void {
@@ -1339,7 +1373,7 @@ class Recorder {
 
   private grow(x: number, y: number): void {
     if (!this.path) {
-      this.path = { color: '', minX: x, minY: y, maxX: x, maxY: y };
+      this.path = { color: '', minX: x, minY: y, maxX: x, maxY: y, curved: false };
       return;
     }
     this.path.minX = Math.min(this.path.minX, x);
@@ -1355,20 +1389,42 @@ function paintPerson(look: Appearance, opts: PersonOptions): Recorder {
   return rec;
 }
 
-/**
- * How many distinct shades of `base` a sprite painted. `shade` is the one ramp
- * the whole game lights its boxes with, so walking it is how a check can tell a
- * shaded volume from a flat fill without knowing which multipliers were used.
- */
-function shadesOf(base: string, rec: Recorder): number {
+/** Every colour `shade` can make from one base, which is the game's whole ramp. */
+function rampOf(base: string): string[] {
   const ramp = new Set<string>();
   for (let k = 0.4; k <= 1.5; k += 0.005) ramp.add(shade(base, k));
+  return [...ramp];
+}
+
+/**
+ * How many distinct shades of `base` a sprite painted, counting the stops of a
+ * soft gradient as well as flat fills. `shade` is the one ramp the whole game
+ * lights its volumes with, so walking it is how a check can tell a shaded form
+ * from a flat fill without knowing which multipliers were used.
+ */
+function shadesOf(base: string, rec: Recorder): number {
   const found = new Set<string>();
-  for (const p of rec.fills) if (ramp.has(p.color)) found.add(p.color);
+  for (const c of rampOf(base)) {
+    if (rec.fills.some((p) => p.color.includes(c))) found.add(c);
+  }
   return found.size;
 }
 
-group('People are drawn as isometric volumes, not as flat discs', () => {
+/**
+ * Whether one colour was laid down as a soft top-to-bottom ramp rather than as a
+ * flat area: lit at the top, sunk at the base. This is the difference between a
+ * rounded 2.5D sprite with volume in it and a cut-out of the same silhouette.
+ */
+function rampedIn(base: string, rec: Recorder): boolean {
+  return rec.fills.some(
+    (p) =>
+      p.color.startsWith('ramp(') &&
+      p.color.includes(shade(base, 1.14)) &&
+      p.color.includes(shade(base, 0.74)),
+  );
+}
+
+group('People are rounded 2.5D volumes, not boxes and not flat discs', () => {
   // These colours land a guest without a hat or a scarf, so the only thing
   // painting in shades of the shirt is the body wearing it.
   const look: Appearance = {
@@ -1387,8 +1443,20 @@ group('People are drawn as isometric volumes, not as flat discs', () => {
     front.fills.length > 40,
     `${front.fills.length} fills`,
   );
-  // A box in this world is a lit lid over two shaded sides, and the lid is the
-  // tell: a flat sprite has no top for the light to catch.
+
+  // The people used to be a stack of iso boxes, which read as Minecraft. Nothing
+  // about a figure may be a hard-edged box face any more: every piece of one is a
+  // capsule, a dome or a disc, so the whole silhouette is round.
+  const boxy = front.fills.filter((p) => !p.curved);
+  check(
+    'every piece of a figure is a rounded shape',
+    boxy.length === 0,
+    `${boxy.length} of ${front.fills.length} fills have only straight edges`,
+  );
+
+  // Rounded is not the same as flat, so each part also has to carry its weight: a
+  // soft ramp down its height, a lit crown where the light catches the turn of
+  // it, a shaded flank down the away side, and one dark line round the outside.
   for (const [part, base] of [
     ['shirt', look.shirt],
     ['skin', look.skin],
@@ -1396,11 +1464,32 @@ group('People are drawn as isometric volumes, not as flat discs', () => {
     ['hair', look.hair],
   ] as Array<[string, string]>) {
     const lit = faces(base);
-    check(`the ${part} has a lit top face`, front.where(lit.top) !== null, lit.top);
-    check(`the ${part} has a side face in shadow`, front.where(lit.left) !== null, lit.left);
+    check(`the ${part} ramps softly from lit to sunk`, rampedIn(base, front), base);
+    check(`the ${part} has a lit crown`, front.where(lit.top) !== null, lit.top);
+    check(`the ${part} has a flank in shadow`, front.where(lit.left) !== null, lit.left);
+    check(
+      `the ${part} is held together by a dark outline`,
+      front.strokes.some((p) => p.color === ink(base)),
+      ink(base),
+    );
     const shades = shadesOf(base, front);
     check(`the ${part} is painted in three shades or more`, shades >= 3, `${shades} shades`);
   }
+
+  // A translucent disc on the floor, lying in the tile plane, is what stops a
+  // rounded sprite hovering over the tiles instead of standing on them.
+  const shadow = front.where('rgba(0,0,0,0.2)');
+  check('a translucent disc grounds the figure', !!shadow);
+  check(
+    'the shadow lies under the feet, not behind them',
+    !!shadow && Math.abs((shadow.minY + shadow.maxY) / 2) < 2,
+  );
+  const flatness = shadow ? (shadow.maxX - shadow.minX) / (shadow.maxY - shadow.minY) : 0;
+  check(
+    'and it lies in the tile plane',
+    Math.abs(flatness - TILE_W / TILE_H) < 0.2,
+    `${flatness.toFixed(2)}:1`,
+  );
 
   // Nothing may drift away from the tile the figure is standing on, or taps —
   // which are matched against that tile, not against these pixels — would miss.
@@ -1426,32 +1515,45 @@ group('People are drawn as isometric volumes, not as flat discs', () => {
     `${(-box.minY).toFixed(1)}px tall`,
   );
 
-  // The face is painted on whichever plane of the head the figure is facing
-  // along, so which side of the head the eyes land on follows the facing.
+  // The face is painted on the front of the head and pushed round towards the way
+  // the figure is turned, so which side of the head the eyes land on follows the
+  // facing rather than sitting square on the middle of it.
   const WHITE = '#fbf7ef';
   const rightward = front.where(WHITE);
   const leftward = paintPerson(look, { ...standing, facing: 'sw' }).where(WHITE);
-  check('a figure facing right has its eyes on the right-hand plane', !!rightward && rightward.minX > 0);
-  check('a figure facing left has them on the left-hand plane', !!leftward && leftward.maxX < 0);
+  check(
+    'a figure facing right wears its face round the right of its head',
+    !!rightward && rightward.minX > 0,
+    rightward ? `${rightward.minX.toFixed(1)}px` : '',
+  );
+  check(
+    'a figure facing left wears it round the left',
+    !!leftward && leftward.maxX < 0,
+    leftward ? `${leftward.maxX.toFixed(1)}px` : '',
+  );
   for (const facing of ['ne', 'nw'] as const) {
     const away = paintPerson(look, { ...standing, facing });
     check(`a figure facing ${facing} shows the back of its head`, away.where(WHITE) === null);
     check(`it is still a whole figure facing ${facing}`, away.fills.length > 40);
   }
 
-  // Poses have to move something, or the walk cycle is a decoration.
-  const stepA = paintPerson(look, { ...standing, walking: true, time: 0.18 });
-  const stepB = paintPerson(look, { ...standing, walking: true, time: 0.52 });
+  // Poses have to move something, or the walk cycle is a decoration. Asking the
+  // feet rather than the whole figure is the point: on a build this top-heavy the
+  // head is the widest thing about it, so overall bounds barely notice a stride.
+  const shoes = '#42332a';
+  const shoeLit = shade(shoes, 1.18);
+  const stepA = paintPerson(look, { ...standing, walking: true, time: 0.18 }).where(shoeLit);
+  const stepB = paintPerson(look, { ...standing, walking: true, time: 0.52 }).where(shoeLit);
   check(
-    'the walk cycle actually moves the legs',
-    Math.abs(stepA.bounds().maxX - stepB.bounds().maxX) > 1 ||
-      Math.abs(stepA.bounds().minX - stepB.bounds().minX) > 1,
+    'the walk cycle actually moves the feet',
+    !!stepA &&
+      !!stepB &&
+      (Math.abs(stepA.maxX - stepB.maxX) > 1 || Math.abs(stepA.minX - stepB.minX) > 1),
   );
 
   const seated = paintPerson(look, { ...standing, sitting: true });
-  const shoes = '#42332a';
-  const standingFeet = front.where(shade(shoes, 1.18));
-  const seatedFeet = seated.where(shade(shoes, 1.18));
+  const standingFeet = front.where(shoeLit);
+  const seatedFeet = seated.where(shoeLit);
   check('a seated figure still has feet on the floor', !!seatedFeet && seatedFeet.maxY > -6);
   check(
     'sitting folds the legs out in front',
