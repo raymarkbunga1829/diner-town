@@ -1210,7 +1210,7 @@ function drawFace(f: Figure, look: Appearance, head: Limb, time: number): void {
   onPlane(f, head, f.front, (half, height) => {
     const { ctx } = f;
     const dx = half * 0.46;
-    const eyeY = height * 0.46;
+    const eyeY = height * 0.44;
     // Each figure gets a different `time` offset, so blinks never synchronise.
     const blinking = (time * 0.31) % 1 < 0.05;
 
@@ -1227,13 +1227,13 @@ function drawFace(f: Figure, look: Appearance, head: Limb, time: number): void {
     } else {
       ctx.fillStyle = '#fbf7ef';
       ctx.beginPath();
-      ctx.ellipse(-dx, eyeY, half * 0.28, height * 0.19, 0, 0, Math.PI * 2);
-      ctx.ellipse(dx, eyeY, half * 0.28, height * 0.19, 0, 0, Math.PI * 2);
+      ctx.ellipse(-dx, eyeY, half * 0.31, height * 0.22, 0, 0, Math.PI * 2);
+      ctx.ellipse(dx, eyeY, half * 0.31, height * 0.22, 0, 0, Math.PI * 2);
       ctx.fill();
       ctx.fillStyle = '#2b2118';
       ctx.beginPath();
-      ctx.arc(-dx + half * 0.05, eyeY + height * 0.02, half * 0.17, 0, Math.PI * 2);
-      ctx.arc(dx + half * 0.05, eyeY + height * 0.02, half * 0.17, 0, Math.PI * 2);
+      ctx.arc(-dx + half * 0.05, eyeY + height * 0.02, half * 0.2, 0, Math.PI * 2);
+      ctx.arc(dx + half * 0.05, eyeY + height * 0.02, half * 0.2, 0, Math.PI * 2);
       ctx.fill();
       ctx.fillStyle = 'rgba(255,255,255,0.92)';
       ctx.beginPath();
