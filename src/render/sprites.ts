@@ -1,20 +1,26 @@
-import { TILE_H, TILE_W, TILE_Z, type Facing } from '../engine/iso';
+import { lerp, TILE_H, TILE_W, TILE_Z, type Facing } from '../engine/iso';
 import { hashString } from '../engine/rng';
 import type { Dish, PlateStyle } from '../game/data/dishes';
 import type { FurnitureDef } from '../game/data/furniture';
 import type { Ingredient } from '../game/data/ingredients';
 import type { Appearance } from '../game/types';
 import {
-  type BoxColors,
+  diamondCorners,
   diamondPath,
   faces,
-  isoBox,
+  ink,
   isoCylinder,
   isoEllipse,
   mix,
+  type RoundedVolume,
+  roundPoly,
   roundRect,
   shade,
+  softBox,
+  softDisc,
+  softPost,
   softShadow,
+  softVolume,
   withAlpha,
 } from './shapes';
 
@@ -32,8 +38,32 @@ export interface FurnitureDrawOptions {
 }
 
 /**
+ * A flat rounded surface on the tile plane — a table top, an inlay, a seat pad.
+ * The same diamond {@link diamondPath} traces, with the corners taken off, so a
+ * top edge is never the one sharp line left on an otherwise softened piece.
+ */
+function softTop(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  sx: number,
+  sy: number,
+  lift: number,
+  fill: string,
+  round = 6,
+): void {
+  const c = diamondCorners(cx, cy, sx, sy, lift);
+  roundPoly(ctx, [c.n, c.e, c.s, c.w], round);
+  ctx.fillStyle = fill;
+  ctx.fill();
+}
+
+/**
  * Draws one piece of floor furniture. `cx`/`cy` is the centre of its footprint
- * on the tile plane; everything is built upward from there out of iso boxes.
+ * on the tile plane; everything is built upward from there out of soft-shaded,
+ * round-cornered iso boxes, so the room the people stand in is made of the same
+ * material they are. Footprints and heights are untouched by the softening —
+ * {@link softBox} takes exactly the measurements {@link isoBox} would.
  */
 export function drawFurniture(
   ctx: CanvasRenderingContext2D,
@@ -51,25 +81,25 @@ export function drawFurniture(
     case 'tableSquare': {
       softShadow(ctx, cx, cy, 0.72);
       legs(ctx, cx, cy, 0.5, 0.52, pal.shade);
-      isoBox(ctx, cx, cy, 0.82, 0.82, 0.09, faces(pal.base), 0.52);
-      isoBox(ctx, cx, cy, 0.7, 0.7, 0.01, faces(pal.top), 0.61);
+      softBox(ctx, cx, cy, 0.82, 0.82, 0.09, pal.base, 0.52, { round: 5 });
+      softTop(ctx, cx, cy, 0.7, 0.7, 0.61, faces(pal.top).top, 5);
       woodGrain(ctx, cx, cy, 0.62, 0.68, withAlpha(pal.shade, 0.2));
       tableSetting(ctx, cx, cy, 0.62, opts.time, opts.dirty);
       break;
     }
     case 'tableRound': {
       softShadow(ctx, cx, cy, 0.7);
-      isoCylinder(ctx, cx, cy, 0.14, 0.5, pal.shade);
+      softPost(ctx, cx, cy, 0.14, 0.5, pal.shade);
       isoEllipse(ctx, cx, cy, 0.4, shade(pal.base, 0.8), 0.5);
-      isoEllipse(ctx, cx, cy, 0.4, pal.top, 0.56);
+      softDisc(ctx, cx, cy, 0.4, pal.top, 0.56);
       isoEllipse(ctx, cx, cy, 0.3, shade(pal.top, 1.06), 0.565);
       tableSetting(ctx, cx, cy, 0.57, opts.time, opts.dirty);
       break;
     }
     case 'tableMarble': {
       softShadow(ctx, cx, cy, 0.74);
-      isoCylinder(ctx, cx, cy, 0.16, 0.5, pal.shade);
-      isoBox(ctx, cx, cy, 0.86, 0.86, 0.1, faces(pal.top), 0.5);
+      softPost(ctx, cx, cy, 0.16, 0.5, pal.shade);
+      softBox(ctx, cx, cy, 0.86, 0.86, 0.1, pal.top, 0.5, { round: 6 });
       ctx.save();
       diamondPath(ctx, cx, cy - 0.6 * TILE_Z, 0.86, 0.86);
       ctx.clip();
@@ -88,10 +118,10 @@ export function drawFurniture(
     case 'tableBooth': {
       softShadow(ctx, cx, cy, 0.8);
       // Bench backs along the two far edges.
-      isoBox(ctx, cx - TILE_W * 0.24, cy - TILE_H * 0.24, 0.2, 0.95, 0.62, faces(pal.base));
-      isoBox(ctx, cx + TILE_W * 0.24, cy - TILE_H * 0.24, 0.95, 0.2, 0.62, faces(shade(pal.base, 0.92)));
+      softBox(ctx, cx - TILE_W * 0.24, cy - TILE_H * 0.24, 0.2, 0.95, 0.62, pal.base, 0, { round: 4 });
+      softBox(ctx, cx + TILE_W * 0.24, cy - TILE_H * 0.24, 0.95, 0.2, 0.62, shade(pal.base, 0.92), 0, { round: 4 });
       legs(ctx, cx, cy, 0.42, 0.5, pal.shade);
-      isoBox(ctx, cx, cy, 0.72, 0.72, 0.09, faces(pal.top), 0.5);
+      softBox(ctx, cx, cy, 0.72, 0.72, 0.09, pal.top, 0.5, { round: 5 });
       woodGrain(ctx, cx, cy, 0.6, 0.7, withAlpha(pal.shade, 0.2));
       tableSetting(ctx, cx, cy, 0.6, opts.time, opts.dirty);
       break;
@@ -101,31 +131,31 @@ export function drawFurniture(
     case 'stool': {
       softShadow(ctx, cx, cy, 0.44);
       legs(ctx, cx, cy, 0.3, 0.42, pal.shade);
-      isoBox(ctx, cx, cy, 0.48, 0.48, 0.08, faces(pal.base), 0.42);
+      softBox(ctx, cx, cy, 0.48, 0.48, 0.08, pal.base, 0.42, { round: 5 });
       break;
     }
     case 'chairWood': {
       softShadow(ctx, cx, cy, 0.46);
       legs(ctx, cx, cy, 0.32, 0.4, pal.shade);
-      isoBox(ctx, cx, cy, 0.52, 0.52, 0.08, faces(pal.base), 0.4);
-      isoBox(ctx, cx - TILE_W * 0.14, cy - TILE_H * 0.14, 0.12, 0.5, 0.42, faces(pal.top), 0.48);
+      softBox(ctx, cx, cy, 0.52, 0.52, 0.08, pal.base, 0.4, { round: 5 });
+      softBox(ctx, cx - TILE_W * 0.14, cy - TILE_H * 0.14, 0.12, 0.5, 0.42, pal.top, 0.48, { round: 4 });
       break;
     }
     case 'chairPadded': {
       softShadow(ctx, cx, cy, 0.5);
       legs(ctx, cx, cy, 0.34, 0.36, pal.shade);
-      isoBox(ctx, cx, cy, 0.58, 0.58, 0.14, faces(pal.base), 0.36);
-      isoBox(ctx, cx - TILE_W * 0.15, cy - TILE_H * 0.15, 0.16, 0.56, 0.44, faces(pal.top), 0.5);
+      softBox(ctx, cx, cy, 0.58, 0.58, 0.14, pal.base, 0.36, { round: 6 });
+      softBox(ctx, cx - TILE_W * 0.15, cy - TILE_H * 0.15, 0.16, 0.56, 0.44, pal.top, 0.5, { round: 4 });
       break;
     }
     case 'chairThrone': {
       softShadow(ctx, cx, cy, 0.54);
       legs(ctx, cx, cy, 0.36, 0.3, pal.shade);
-      isoBox(ctx, cx, cy, 0.64, 0.64, 0.18, faces(pal.base), 0.3);
-      isoBox(ctx, cx - TILE_W * 0.16, cy - TILE_H * 0.16, 0.16, 0.62, 0.6, faces(pal.top), 0.48);
+      softBox(ctx, cx, cy, 0.64, 0.64, 0.18, pal.base, 0.3, { round: 6 });
+      softBox(ctx, cx - TILE_W * 0.16, cy - TILE_H * 0.16, 0.16, 0.62, 0.6, pal.top, 0.48, { round: 4 });
       // Arm rests.
-      isoBox(ctx, cx + TILE_W * 0.02, cy - TILE_H * 0.2, 0.5, 0.12, 0.2, faces(pal.base), 0.48);
-      isoBox(ctx, cx - TILE_W * 0.2, cy + TILE_H * 0.02, 0.12, 0.5, 0.2, faces(pal.base), 0.48);
+      softBox(ctx, cx + TILE_W * 0.02, cy - TILE_H * 0.2, 0.5, 0.12, 0.2, pal.base, 0.48, { round: 5 });
+      softBox(ctx, cx - TILE_W * 0.2, cy + TILE_H * 0.02, 0.12, 0.5, 0.2, pal.base, 0.48, { round: 5 });
       ctx.fillStyle = pal.accent;
       ctx.beginPath();
       ctx.ellipse(cx, cy - 1.02 * TILE_Z, 5, 3, 0, 0, Math.PI * 2);
@@ -136,14 +166,14 @@ export function drawFurniture(
     // ------------------------------------------------------------- stoves
     case 'stoveCamp': {
       softShadow(ctx, cx, cy, 0.5);
-      isoBox(ctx, cx, cy, 0.62, 0.62, 0.36, faces(pal.base));
+      softBox(ctx, cx, cy, 0.62, 0.62, 0.36, pal.base, 0, { round: 4 });
       burner(ctx, cx, cy, 0.38, 0.18, opts, pal.accent);
       break;
     }
     case 'stoveGas': {
       softShadow(ctx, cx, cy, 0.66);
-      isoBox(ctx, cx, cy, 0.8, 0.8, 0.55, faces(pal.base));
-      isoBox(ctx, cx, cy, 0.84, 0.84, 0.05, faces(pal.top), 0.55);
+      softBox(ctx, cx, cy, 0.8, 0.8, 0.55, pal.base, 0, { round: 3.5 });
+      softBox(ctx, cx, cy, 0.84, 0.84, 0.05, pal.top, 0.55, { round: 4 });
       burner(ctx, cx - 8, cy - 4, 0.28, 0.62, opts, pal.accent);
       burner(ctx, cx + 8, cy + 4, 0.28, 0.62, opts, pal.accent);
       knobs(ctx, cx, cy, pal.accent);
@@ -151,14 +181,14 @@ export function drawFurniture(
     }
     case 'stovePro': {
       softShadow(ctx, cx, cy, 0.74);
-      isoBox(ctx, cx, cy, 0.9, 0.9, 0.6, faces(pal.base));
-      isoBox(ctx, cx, cy, 0.94, 0.94, 0.06, faces(pal.top), 0.6);
+      softBox(ctx, cx, cy, 0.9, 0.9, 0.6, pal.base, 0, { round: 3.5 });
+      softBox(ctx, cx, cy, 0.94, 0.94, 0.06, pal.top, 0.6, { round: 4 });
       burner(ctx, cx - 10, cy - 5, 0.26, 0.68, opts, pal.accent);
       burner(ctx, cx + 10, cy + 5, 0.26, 0.68, opts, pal.accent);
       burner(ctx, cx + 6, cy - 9, 0.22, 0.68, opts, pal.accent);
       knobs(ctx, cx, cy, pal.accent);
       // Extraction hood floating above.
-      isoBox(ctx, cx, cy, 0.95, 0.95, 0.12, faces(shade(pal.base, 1.1)), 1.35);
+      softBox(ctx, cx, cy, 0.95, 0.95, 0.12, shade(pal.base, 1.1), 1.35, { round: 6 });
       break;
     }
     case 'stoveTandoor': {
@@ -177,8 +207,8 @@ export function drawFurniture(
     case 'counterWood':
     case 'counterSteel': {
       softShadow(ctx, cx, cy, 0.7);
-      isoBox(ctx, cx, cy, 0.84, 0.84, 0.5, faces(pal.base));
-      isoBox(ctx, cx, cy, 0.9, 0.9, 0.06, faces(pal.top), 0.5);
+      softBox(ctx, cx, cy, 0.84, 0.84, 0.5, pal.base, 0, { round: 3.5 });
+      softBox(ctx, cx, cy, 0.9, 0.9, 0.06, pal.top, 0.5, { round: 4 });
       if (def.shape === 'counterSteel') {
         ctx.strokeStyle = withAlpha(pal.accent, 0.6);
         ctx.lineWidth = 1.5;
@@ -193,8 +223,8 @@ export function drawFurniture(
     case 'sinkBasic':
     case 'dishwasher': {
       softShadow(ctx, cx, cy, 0.66);
-      isoBox(ctx, cx, cy, 0.82, 0.82, 0.5, faces(pal.base));
-      isoBox(ctx, cx, cy, 0.86, 0.86, 0.06, faces(pal.top), 0.5);
+      softBox(ctx, cx, cy, 0.82, 0.82, 0.5, pal.base, 0, { round: 3.5 });
+      softBox(ctx, cx, cy, 0.86, 0.86, 0.06, pal.top, 0.5, { round: 4 });
       if (def.shape === 'sinkBasic') {
         isoEllipse(ctx, cx, cy, 0.3, shade(pal.base, 0.55), 0.565);
         isoEllipse(ctx, cx, cy, 0.24, withAlpha(pal.accent, 0.85), 0.57);
@@ -264,7 +294,7 @@ export function drawFurniture(
     }
     case 'jukebox': {
       softShadow(ctx, cx, cy, 0.56);
-      isoBox(ctx, cx, cy, 0.66, 0.66, 1.0, faces(pal.base));
+      softBox(ctx, cx, cy, 0.66, 0.66, 1.0, pal.base, 0, { round: 4 });
       ctx.fillStyle = pal.top;
       ctx.beginPath();
       ctx.ellipse(cx, cy - 0.82 * TILE_Z, 12, 9, 0, Math.PI, 0);
@@ -276,10 +306,10 @@ export function drawFurniture(
     }
     case 'aquarium': {
       softShadow(ctx, cx, cy, 0.66);
-      isoBox(ctx, cx, cy, 0.8, 0.8, 0.42, faces(pal.base));
+      softBox(ctx, cx, cy, 0.8, 0.8, 0.42, pal.base, 0, { round: 4 });
       ctx.save();
       ctx.globalAlpha *= 0.55;
-      isoBox(ctx, cx, cy, 0.76, 0.76, 0.62, faces(pal.top), 0.42);
+      softBox(ctx, cx, cy, 0.76, 0.76, 0.62, pal.top, 0.42, { round: 4 });
       ctx.restore();
       for (let i = 0; i < 3; i++) {
         const t = opts.time * 0.9 + i * 2.1;
@@ -316,8 +346,8 @@ export function drawFurniture(
     }
     case 'statue': {
       softShadow(ctx, cx, cy, 0.5);
-      isoBox(ctx, cx, cy, 0.5, 0.5, 0.3, faces(shade(pal.base, 0.8)));
-      isoCylinder(ctx, cx, cy, 0.16, 0.55, pal.top, 0.3);
+      softBox(ctx, cx, cy, 0.5, 0.5, 0.3, shade(pal.base, 0.8), 0, { round: 5 });
+      softPost(ctx, cx, cy, 0.16, 0.55, pal.top, 0.3);
       ctx.fillStyle = pal.accent;
       ctx.beginPath();
       ctx.arc(cx, cy - 1.0 * TILE_Z, 8, 0, Math.PI * 2);
@@ -335,20 +365,10 @@ export function drawFurniture(
     // --------------------------------------------------------------- rugs
     case 'rugSmall':
     case 'rugFancy': {
-      diamondPath(ctx, cx, cy, 0.94, 0.94);
-      ctx.fillStyle = pal.base;
-      ctx.fill();
-      diamondPath(ctx, cx, cy, 0.72, 0.72);
-      ctx.fillStyle = pal.top;
-      ctx.fill();
-      diamondPath(ctx, cx, cy, 0.44, 0.44);
-      ctx.fillStyle = def.shape === 'rugFancy' ? pal.accent : pal.shade;
-      ctx.fill();
-      if (def.shape === 'rugFancy') {
-        diamondPath(ctx, cx, cy, 0.2, 0.2);
-        ctx.fillStyle = pal.base;
-        ctx.fill();
-      }
+      softTop(ctx, cx, cy, 0.94, 0.94, 0, pal.base, 6);
+      softTop(ctx, cx, cy, 0.72, 0.72, 0, pal.top, 5);
+      softTop(ctx, cx, cy, 0.44, 0.44, 0, def.shape === 'rugFancy' ? pal.accent : pal.shade, 5);
+      if (def.shape === 'rugFancy') softTop(ctx, cx, cy, 0.2, 0.2, 0, pal.base, 3);
       break;
     }
 
@@ -384,7 +404,7 @@ function legs(
   for (const [ox, oy] of offsets) {
     const px = cx + ((ox - oy) * TILE_W) / 4;
     const py = cy + ((ox + oy) * TILE_H) / 4;
-    isoBox(ctx, px, py, 0.1, 0.1, height, faces(color));
+    softPost(ctx, px, py, 0.08, height, color);
   }
 }
 
@@ -613,18 +633,22 @@ interface Figure extends Frame {
 }
 
 /**
- * One box of a body, in the figure's own frame: `u` runs across the body towards
- * the camera, `v` runs the way the figure faces, `y` is the lift off the floor,
- * and `w`/`d`/`h` are its size across, front-to-back and up. Tile units, before
- * the build scale, exactly like the furniture.
+ * One rounded piece of a body, in the figure's own frame: `u` runs across the
+ * body towards the camera, `v` runs the way the figure faces, `y` is the lift off
+ * the floor and `h` the height. `r` is the half width at the base and `rTop` at
+ * the top, so a single piece can be a pill, a barrel or a bell. Tile units,
+ * before the build scale, exactly like the furniture.
  */
-interface Limb {
+interface Part {
   u: number;
   v: number;
   y: number;
-  w: number;
-  d: number;
   h: number;
+  r: number;
+  rTop?: number;
+  roundTop?: number;
+  roundBottom?: number;
+  bulge?: number;
 }
 
 /** Where a point in the figure's frame lands on screen. */
@@ -637,60 +661,68 @@ function spot(f: Figure, u: number, v: number, y = 0): { x: number; y: number } 
   };
 }
 
-/** A limb's footprint on the two grid axes, which swap with the facing. */
-function footprint(f: Figure, l: Limb): [number, number] {
-  return f.fwd[0] !== 0 ? [l.d * f.s, l.w * f.s] : [l.w * f.s, l.d * f.s];
+/** Where a part lands on screen, in the terms the shape helpers paint in. */
+function volumeOf(f: Figure, p: Part): RoundedVolume {
+  const at = spot(f, p.u, p.v);
+  const bottom = at.y - p.y * f.s * TILE_Z;
+  const across = (r: number): number => (TILE_W / 2) * r * f.s;
+  return {
+    cx: at.x,
+    bottom,
+    top: bottom - p.h * f.s * TILE_Z,
+    half: across(p.r),
+    halfTop: across(p.rTop ?? p.r),
+    roundTop: p.roundTop,
+    roundBottom: p.roundBottom,
+    bulge: across(p.bulge ?? 0),
+  };
 }
 
-/** One body part, as an iso box with a lit top and two shaded sides. */
-function limb(f: Figure, l: Limb, colors: BoxColors): void {
-  const at = spot(f, l.u, l.v);
-  const [sx, sy] = footprint(f, l);
-  isoBox(f.ctx, at.x, at.y, sx, sy, l.h * f.s, colors, l.y * f.s);
-}
-
-/**
- * The three face colours of a body part. `faces` shades the left-hand face hard,
- * which is right for a building but would leave half the crowd with their face
- * in shadow, so the plane a figure's front lands on is lifted a little.
- */
-function volume(f: Figure, base: string): BoxColors {
-  const c = faces(base);
-  if (f.front === 'left') return { ...c, left: shade(base, 0.86) };
-  if (f.front === 'right') return { ...c, right: shade(base, 0.98) };
-  return c;
-}
-
-/**
- * Lay flat detail onto one of a limb's two camera-facing planes: local x runs
- * along the plane either side of its centre, local y runs straight down the
- * screen from its top edge, and the plane's width and height are handed to the
- * caller. Because the shear is the plane's own, a face or a row of buttons drawn
- * here leans with the box it belongs to instead of floating across the front of
- * the figure — which is the whole difference between a painted head and a decal.
- */
-function onPlane(
+/** One rounded body part: soft ramp, lit crown, shaded flank, dark outline. */
+function paint(
   f: Figure,
-  l: Limb,
+  p: Part,
+  base: string,
+  opts: { light?: number; outline?: number } = {},
+): void {
+  softVolume(f.ctx, volumeOf(f, p), base, {
+    line: 1.05 * f.s,
+    light: opts.light,
+    outline: opts.outline === undefined ? undefined : ink(base, opts.outline),
+  });
+}
+
+/** A stubby capsule with a nub of an end: the shape every limb is made of. */
+function pill(u: number, v: number, y: number, h: number, r: number): Part {
+  return { u, v, y, h, r, rTop: r * 0.94, roundTop: 0.9, roundBottom: 0.9, bulge: r * 0.14 };
+}
+
+/**
+ * A local frame laid on the surface of a rounded part: the origin sits `out`
+ * tiles in front of its axis, `up` of the way up it; local x runs across the
+ * surface, local y straight down the screen, and the whole frame is sheared with
+ * the facing. A face or a row of buttons painted here leans with the body it
+ * belongs to instead of floating flat across the front of the figure — which is
+ * the whole difference between a painted face and a decal.
+ *
+ * The part's half width at that height and its full height come back to the
+ * caller, so a feature can be sized against the piece it sits on.
+ */
+function onSurface(
+  f: Figure,
+  p: Part,
   which: Plane | null,
-  paint: (half: number, height: number) => void,
+  out: number,
+  up: number,
+  paintOn: (half: number, height: number) => void,
 ): void {
   if (!which) return;
-  const at = spot(f, l.u, l.v, l.y + l.h);
-  const [sx, sy] = footprint(f, l);
-  const ax = (TILE_W / 4) * sx;
-  const ay = (TILE_H / 4) * sx;
-  const bx = (TILE_W / 4) * sy;
-  const by = (TILE_H / 4) * sy;
+  const at = spot(f, p.u, p.v + out, p.y + p.h * up);
+  const half = (TILE_W / 2) * lerp(p.r, p.rTop ?? p.r, up) * f.s;
   const { ctx } = f;
   ctx.save();
-  if (which === 'right') {
-    ctx.transform(1, -0.5, 0, 1, at.x + ax, at.y + ay);
-    paint(bx, l.h * f.s * TILE_Z);
-  } else {
-    ctx.transform(1, 0.5, 0, 1, at.x - bx, at.y + by);
-    paint(ax, l.h * f.s * TILE_Z);
-  }
+  ctx.transform(1, which === 'right' ? -0.5 : 0.5, 0, 1, at.x, at.y);
+  paintOn(half, p.h * f.s * TILE_Z);
   ctx.restore();
 }
 
@@ -699,22 +731,29 @@ function onPlane(
  * stand half a tile-height off the floor, which on a body this short is already
  * hip height — so sitting down folds the legs up rather than lowering the head.
  */
-const HIP_STAND = 0.4;
-const HIP_SIT = 0.46;
+const HIP_STAND = 0.28;
+const HIP_SIT = 0.4;
 /** How far the legs and the arms sit either side of the middle. */
-const LEG_U = 0.12;
-const ARM_U = 0.27;
+const LEG_U = 0.115;
+const ARM_U = 0.3;
+/** Shoe leather, which every foot and every seated ankle is painted in. */
+const SHOE = '#42332a';
 
 /**
- * People are built the way the furniture is: a stack of small isometric boxes
- * with a lit top and two shaded sides, so a figure standing on the tiles catches
- * the same light as the chair beside it. Nothing is mirrored — a body is
- * assembled in its own frame, and the two away facings simply show the back of
- * the head — and every piece of detail is painted on the plane of the box it
- * belongs to, so it leans with the figure rather than sitting flat on top of it.
+ * People are rounded 2.5D toys. Every piece is a soft-shaded capsule with a lit
+ * crown where the light catches the turn of it, a shaded flank down the away
+ * side and one dark line round its silhouette — the same three-tone ramp the
+ * furniture is lit with, so a figure standing on the tiles belongs to the chair
+ * beside it rather than to a different game.
  *
- * Proportions stay chibi: a slightly oversized head on a short body, which is
- * what keeps a face readable when a tile is only 64px wide.
+ * Nothing is mirrored: a body is assembled in its own frame, so the two away
+ * facings simply show the back of a head, and every piece of detail is painted
+ * on the surface of the part it belongs to.
+ *
+ * Proportions are deliberately top-heavy — a squoval head about as tall as the
+ * whole body under it, stubby pill limbs with nubs for hands and feet and no
+ * elbow or knee anywhere — because that is what keeps a face readable when a
+ * tile is 64px wide on a phone.
  */
 export function drawPerson(
   ctx: CanvasRenderingContext2D,
@@ -741,13 +780,14 @@ export function drawPerson(
 
   ctx.save();
   if (opts.alpha !== undefined) ctx.globalAlpha = opts.alpha;
-  // The shadow spreads as the figure lifts off, which sells the bounce.
-  softShadow(ctx, cx, cy, (opts.sitting ? 0.3 : 0.36) + bob * 0.4, 0.2);
+  // A small translucent disc on the floor, spreading as the figure lifts off,
+  // which is what plants a rounded sprite on the tiles instead of over them.
+  softShadow(ctx, cx, cy, (opts.sitting ? 0.3 : 0.34) + bob * 0.4, 0.2);
 
   drawLeg(f, look, -1, hip, stride, opts.sitting);
   drawLeg(f, look, 1, hip, stride, opts.sitting);
   drawArm(f, look, opts, -1, hip, stride, lean, shirt);
-  drawTorso(f, look, opts, hip, lean, sway, shirt, trim);
+  drawTorso(f, opts, hip, lean, sway, shirt, trim);
   drawHeadGroup(f, look, opts, hip, lean, sway);
   const hand = drawArm(f, look, opts, 1, hip, stride, lean, shirt);
   drawHeld(f, opts, hand);
@@ -755,7 +795,11 @@ export function drawPerson(
   ctx.restore();
 }
 
-/** Thigh, shin and shoe down one side, either standing or folded onto a chair. */
+/**
+ * One stubby leg with a nub of a foot. Standing, it is a single pill from the hip
+ * to the floor with no knee in it, which is most of what separates a rounded toy
+ * from a stack of boxes; seated, it folds forward off the chair.
+ */
 function drawLeg(
   f: Figure,
   look: Appearance,
@@ -764,32 +808,32 @@ function drawLeg(
   stride: number,
   sitting: boolean,
 ): void {
-  const thigh = volume(f, look.pants);
-  // A shin a shade off the thigh is all it takes for a knee to read at this size.
-  const shin = volume(f, shade(look.pants, 1.07));
-  const shoe = volume(f, '#42332a');
   const u = side * LEG_U;
 
   if (sitting) {
-    // Thighs run forward off the seat, shins drop from the knee to the floor.
-    limb(f, { u, v: 0.26, y: 0, w: 0.15, d: 0.18, h: 0.05 }, shoe);
-    limb(f, { u, v: 0.26, y: 0.04, w: 0.13, d: 0.14, h: hip - 0.16 }, shin);
-    limb(f, { u, v: 0.13, y: hip - 0.12, w: 0.15, d: 0.3, h: 0.13 }, thigh);
+    // Shin dropped to the floor in front of the seat, then the thigh laid over
+    // the top of it, so the fold reads without a hard joint showing.
+    paint(f, pill(u, 0.26, 0.02, hip - 0.1, 0.1), look.pants);
+    paint(f, pill(u, 0.3, 0, 0.085, 0.115), SHOE);
+    paint(
+      f,
+      { u, v: 0.14, y: hip - 0.14, h: 0.17, r: 0.12, rTop: 0.115, roundTop: 0.9, roundBottom: 0.9, bulge: 0.02 },
+      look.pants,
+    );
     return;
   }
 
   const swing = side * stride;
   // The leading foot clears the tiles, so a stride is a step and not a shuffle.
   const raise = Math.max(0, swing) * 0.03;
-  const knee = hip - 0.2;
-  limb(f, { u, v: swing * 0.1 + 0.02, y: raise, w: 0.15, d: 0.2, h: 0.05 }, shoe);
-  limb(f, { u, v: swing * 0.09, y: raise + 0.04, w: 0.13, d: 0.14, h: knee - raise - 0.02 }, shin);
-  limb(f, { u, v: swing * 0.05, y: knee, w: 0.15, d: 0.16, h: hip - knee + 0.03 }, thigh);
+  paint(f, pill(u, swing * 0.07, raise + 0.02, hip - raise + 0.03, 0.105), look.pants);
+  paint(f, pill(u, swing * 0.1 + 0.05, raise, 0.085, 0.115), SHOE);
 }
 
 /**
- * Upper arm, forearm and hand down one side. Returns the hand, so whatever is
- * being carried can be placed on it rather than near it.
+ * One stubby arm with a nub of a hand, again a single pill so there is no elbow
+ * to read. Returns the hand, so whatever is being carried can be placed on it
+ * rather than near it.
  */
 function drawArm(
   f: Figure,
@@ -800,47 +844,51 @@ function drawArm(
   stride: number,
   lean: number,
   shirt: string,
-): Limb {
+): Part {
   // Arms swing against the leg on the same side. The near arm is the one that
   // carries, so a tray is always on the side the camera can see.
   const swing = -side * stride;
   const carrying = side === 1 && !!opts.carrying;
   const u = side * ARM_U;
-
-  const upper: Limb = { u, v: swing * 0.06 + lean * 0.6, y: hip + 0.14, w: 0.12, d: 0.14, h: 0.22 };
-  let fore: Limb = { u, v: swing * 0.12 + lean * 0.5, y: hip - 0.02, w: 0.11, d: 0.13, h: 0.2 };
-  let hand: Limb = { u, v: swing * 0.14 + lean * 0.5, y: hip - 0.1, w: 0.12, d: 0.12, h: 0.09 };
-  if (carrying) {
-    // Forearm up and out under the tray.
-    upper.v = 0.03 + lean;
-    upper.h = 0.24;
-    fore = { u: u * 0.92, v: 0.17, y: hip + 0.26, w: 0.11, d: 0.24, h: 0.1 };
-    hand = { u: u * 0.85, v: 0.3, y: hip + 0.24, w: 0.12, d: 0.12, h: 0.08 };
-  } else if (opts.sitting) {
-    // Forearms come forward onto the table, which is most of what tells a seated
-    // figure apart from one standing with its knees bent.
-    fore = { u: u * 0.95, v: 0.12, y: hip + 0.02, w: 0.11, d: 0.2, h: 0.1 };
-    hand = { u: u * 0.9, v: 0.25, y: hip, w: 0.12, d: 0.12, h: 0.09 };
-  }
-
-  // Staff work in long sleeves; guests turn up in short ones.
-  const sleeve = volume(f, shirt);
-  limb(f, upper, sleeve);
-  limb(f, fore, opts.role ? sleeve : volume(f, look.skin));
   // Cleaners work in rubber gloves, which is a surprisingly strong cue for which
   // of three near-identical figures is the one wiping tables.
-  limb(f, hand, volume(f, opts.role === 'cleaner' ? '#f4c22e' : look.skin));
+  const skin = opts.role === 'cleaner' ? '#f4c22e' : look.skin;
+
+  if (carrying) {
+    // The arm folds up and forward so the tray rides flat on the palm, out where
+    // the plate on it can be seen rather than tucked against the chest.
+    paint(f, pill(u * 0.96, 0.04, hip + 0.06, 0.28, 0.09), shirt);
+    paint(f, pill(u * 0.92, 0.22, hip + 0.24, 0.18, 0.088), shirt);
+    const hand = pill(u * 0.88, 0.3, hip + 0.4, 0.09, 0.1);
+    paint(f, hand, skin);
+    return hand;
+  }
+
+  // Seated, the hands come forward onto the table, which is most of what tells a
+  // seated figure apart from one standing with its knees bent.
+  const arm = opts.sitting
+    ? pill(u * 0.96, 0.08, hip + 0.02, 0.3, 0.09)
+    : pill(u, swing * 0.08 + lean * 0.6, hip + 0.02, 0.32, 0.09);
+  const hand = opts.sitting
+    ? pill(u * 0.9, 0.2, hip - 0.03, 0.1, 0.1)
+    : pill(u, swing * 0.11 + lean * 0.6, hip - 0.08, 0.1, 0.1);
+
+  paint(f, arm, shirt);
+  // Staff work in long sleeves; guests turn up in short ones, so a bare forearm
+  // shows below the cuff.
+  if (!opts.role) paint(f, { ...arm, h: arm.h * 0.45, r: arm.r * 0.96, rTop: arm.r * 0.96 }, look.skin);
+  paint(f, hand, skin);
   return hand;
 }
 
 /**
- * Hips, chest and shoulders, plus whatever the figure is wearing over them.
- * Uniforms are garments with their own thickness standing off the chest, not a
- * pattern painted on it, so a waistcoat still reads as worn from any angle.
+ * The body: one soft barrel a little wider at the shoulders than at the waist,
+ * plus whatever the figure is wearing over it. Uniforms are garments with their
+ * own thickness standing off the chest, not a pattern painted on it, so a
+ * waistcoat still reads as worn from any angle.
  */
 function drawTorso(
   f: Figure,
-  look: Appearance,
   opts: PersonOptions,
   hip: number,
   lean: number,
@@ -848,48 +896,51 @@ function drawTorso(
   shirt: string,
   trim: string,
 ): void {
-  const pelvis: Limb = { u: sway * 0.5, v: lean * 0.5, y: hip - 0.06, w: 0.32, d: 0.24, h: 0.15 };
-  const torso: Limb = { u: sway, v: lean, y: hip + 0.06, w: 0.4, d: 0.26, h: 0.28 };
-  const shoulders: Limb = { u: sway, v: lean, y: hip + 0.26, w: 0.46, d: 0.28, h: 0.1 };
   const { ctx } = f;
+  const torso: Part = {
+    u: sway,
+    v: lean,
+    y: hip - 0.05,
+    h: 0.42,
+    r: 0.225,
+    rTop: 0.235,
+    roundTop: 0.8,
+    roundBottom: 0.5,
+    bulge: 0.03,
+  };
 
-  limb(f, pelvis, volume(f, look.pants));
-  limb(f, torso, volume(f, shirt));
-  limb(f, shoulders, volume(f, shirt));
-
-  // Hem, across both planes the camera can see so it wraps the body.
-  for (const plane of [f.front, f.back, f.flank]) {
-    onPlane(f, torso, plane, (half, height) => {
-      ctx.fillStyle = withAlpha(trim, 0.9);
-      ctx.fillRect(-half, height - 2.2 * f.s, half * 2, 2.2 * f.s);
-    });
-  }
-
-  // Collar, and the same notch on the back of the neck when turned away.
-  onPlane(f, shoulders, f.front, (half, height) => {
-    ctx.fillStyle = trim;
-    ctx.beginPath();
-    ctx.moveTo(-half * 0.34, 0);
-    ctx.lineTo(0, height * 0.8);
-    ctx.lineTo(half * 0.34, 0);
-    ctx.closePath();
-    ctx.fill();
-  });
-  onPlane(f, shoulders, f.back, (half, height) => {
-    ctx.fillStyle = withAlpha(trim, 0.8);
-    ctx.fillRect(-half * 0.4, 0, half * 0.8, height * 0.42);
-  });
+  paint(f, torso, shirt);
+  // Hem: the same body a shade wider and much shorter, so the shirt ends in a
+  // band that wraps the figure whichever way it is turned.
+  paint(
+    f,
+    { ...torso, y: hip - 0.06, h: 0.13, r: torso.r * 1.05, rTop: torso.r * 1.02, roundTop: 0.2, roundBottom: 0.8 },
+    trim,
+    { light: 0.7 },
+  );
+  // Collar at the throat, which does the same job at the other end.
+  paint(
+    f,
+    { u: torso.u, v: torso.v, y: hip + 0.31, h: 0.08, r: 0.145, rTop: 0.12, roundTop: 0.6, roundBottom: 0.4 },
+    trim,
+    { light: 0.7 },
+  );
 
   if (opts.role === 'chef') {
     // Neckerchief, knotted at the throat.
-    limb(f, { ...shoulders, y: hip + 0.36, w: 0.34, d: 0.28, h: 0.07 }, volume(f, trim));
-    onPlane(f, torso, f.front, (half, height) => {
+    paint(
+      f,
+      { u: torso.u, v: torso.v, y: hip + 0.29, h: 0.11, r: 0.175, rTop: 0.13, roundTop: 0.7, roundBottom: 0.5 },
+      trim,
+      { light: 0.7 },
+    );
+    onSurface(f, torso, f.front, 0.13, 0.55, (half, height) => {
       // Double-breasted buttons.
       ctx.fillStyle = '#d8cfbb';
-      for (let i = 0; i < 3; i++) {
-        for (const dx of [-0.32, 0.32]) {
+      for (let i = -1; i <= 1; i++) {
+        for (const dx of [-0.3, 0.3]) {
           ctx.beginPath();
-          ctx.arc(dx * half, height * (0.22 + i * 0.26), 0.75 * f.s, 0, Math.PI * 2);
+          ctx.arc(dx * half, i * height * 0.19, 0.8 * f.s, 0, Math.PI * 2);
           ctx.fill();
         }
       }
@@ -897,14 +948,24 @@ function drawTorso(
   }
 
   if (opts.role === 'waiter' && f.front) {
-    // Waistcoat: a panel standing off the chest, with the buttons on its own face.
-    const vest: Limb = { u: torso.u, v: torso.v + 0.125, y: hip + 0.08, w: 0.32, d: 0.04, h: 0.26 };
-    limb(f, vest, volume(f, trim));
-    onPlane(f, vest, f.front, (_half, height) => {
+    // Waistcoat: a rounded panel standing off the chest, buttons on its own face.
+    const vest: Part = {
+      u: torso.u,
+      v: torso.v + 0.1,
+      y: hip + 0.02,
+      h: 0.3,
+      r: 0.135,
+      rTop: 0.15,
+      roundTop: 0.7,
+      roundBottom: 0.7,
+      bulge: 0.012,
+    };
+    paint(f, vest, trim);
+    onSurface(f, vest, f.front, 0.06, 0.5, (_half, height) => {
       ctx.fillStyle = 'rgba(255, 244, 220, 0.9)';
       for (let i = 0; i < 2; i++) {
         ctx.beginPath();
-        ctx.arc(0, height * (0.42 + i * 0.3), 0.7 * f.s, 0, Math.PI * 2);
+        ctx.arc(0, height * (i * 0.26 - 0.08), 0.7 * f.s, 0, Math.PI * 2);
         ctx.fill();
       }
     });
@@ -913,41 +974,42 @@ function drawTorso(
   if (opts.uniform) {
     // Aprons: a bib for the kitchen, a short bistro apron for the floor. Behind
     // the figure there is nothing to see but the straps, so that is all we draw.
-    const bib = opts.role === 'waiter' ? 0.2 : 0.3;
     if (f.front) {
-      const apron: Limb = {
+      const apron: Part = {
         u: 0,
-        v: lean + 0.15,
-        y: hip - 0.02,
-        w: 0.26,
-        d: 0.035,
-        h: bib,
+        v: lean + 0.1,
+        y: hip - 0.05,
+        h: opts.role === 'waiter' ? 0.2 : 0.31,
+        r: 0.155,
+        rTop: 0.13,
+        roundTop: 0.35,
+        roundBottom: 0.6,
       };
-      limb(f, apron, faces('#f7f2e6'));
-      onPlane(f, apron, f.front, (half, height) => {
+      paint(f, apron, '#f7f2e6', { light: 0.7 });
+      onSurface(f, apron, f.front, 0.05, 0.9, (half) => {
         ctx.strokeStyle = 'rgba(186, 172, 150, 0.75)';
         ctx.lineWidth = 0.9 * f.s;
         ctx.beginPath();
-        ctx.moveTo(-half, height * 0.16);
-        ctx.lineTo(half, height * 0.16);
+        ctx.moveTo(-half * 0.7, 0);
+        ctx.lineTo(half * 0.7, 0);
         ctx.stroke();
       });
     } else {
-      onPlane(f, torso, f.back, (half, height) => {
+      onSurface(f, torso, f.back, -0.16, 0.5, (half, height) => {
         ctx.strokeStyle = 'rgba(240, 234, 220, 0.85)';
         ctx.lineWidth = 1.3 * f.s;
         ctx.beginPath();
-        ctx.moveTo(-half * 0.55, height * 0.1);
-        ctx.lineTo(half * 0.55, height * 0.62);
-        ctx.moveTo(half * 0.55, height * 0.1);
-        ctx.lineTo(-half * 0.55, height * 0.62);
+        ctx.moveTo(-half * 0.5, -height * 0.3);
+        ctx.lineTo(half * 0.5, height * 0.18);
+        ctx.moveTo(half * 0.5, -height * 0.3);
+        ctx.lineTo(-half * 0.5, height * 0.18);
         ctx.stroke();
       });
     }
   }
 }
 
-/** Neck, head, ears, hair, face and hat, in the order the camera needs them. */
+/** Neck, head, hair, face and hat, in the order the camera needs them. */
 function drawHeadGroup(
   f: Figure,
   look: Appearance,
@@ -956,33 +1018,29 @@ function drawHeadGroup(
   lean: number,
   sway: number,
 ): void {
-  const skin = volume(f, look.skin);
-  // Wider than deep, so the face gets as much of the wall as the head can spare.
-  const head: Limb = {
+  // A squoval: rounded on every corner, a shade wider than it is tall, a touch
+  // narrower at the crown, and about as tall as the whole body under it.
+  const head: Part = {
     u: sway * 0.6,
-    v: lean * 1.3,
-    y: hip + 0.42,
-    w: 0.46,
-    d: 0.36,
-    h: 0.32,
+    v: lean * 1.2,
+    y: hip + 0.36,
+    h: 0.58,
+    r: 0.37,
+    rTop: 0.35,
+    roundTop: 0.66,
+    roundBottom: 0.6,
+    bulge: 0.025,
   };
-  const ear = (side: 1 | -1): Limb => ({
-    u: head.u + side * 0.235,
-    v: head.v - 0.01,
-    y: head.y + 0.1,
-    w: 0.04,
-    d: 0.1,
-    h: 0.09,
-  });
 
-  limb(f, { u: head.u, v: head.v, y: hip + 0.34, w: 0.15, d: 0.14, h: 0.09 }, skin);
-  // A jaw narrower than the head, which together with the step the hair puts on
-  // the crown is what keeps a boxy head from reading as a plain cube.
-  limb(f, { u: head.u, v: head.v, y: head.y - 0.05, w: 0.36, d: 0.28, h: 0.06 }, skin);
-  limb(f, ear(-1), skin);
+  // Just enough neck that the head is not glued straight onto the shoulders.
+  paint(
+    f,
+    { u: head.u, v: head.v, y: hip + 0.3, h: 0.1, r: 0.1, rTop: 0.11, roundTop: 0.4, roundBottom: 0.3 },
+    look.skin,
+    { light: 0.6 },
+  );
   drawHairBack(f, look, head);
-  limb(f, head, skin);
-  limb(f, ear(1), skin);
+  paint(f, head, look.skin);
   drawHair(f, look, head);
   drawFace(f, look, head, opts.time);
   if (opts.role) drawUniformHat(f, opts.role, head);
@@ -990,7 +1048,7 @@ function drawHeadGroup(
 }
 
 /** Whatever is in the near hand, placed on it. */
-function drawHeld(f: Figure, opts: PersonOptions, hand: Limb): void {
+function drawHeld(f: Figure, opts: PersonOptions, hand: Part): void {
   const { ctx } = f;
   if (opts.carrying) {
     const at = spot(f, hand.u, hand.v, hand.y + hand.h);
@@ -1002,8 +1060,17 @@ function drawHeld(f: Figure, opts: PersonOptions, hand: Limb): void {
     return;
   }
   if (opts.prop === 'notepad') {
-    const pad: Limb = { u: hand.u * 0.9, v: hand.v + 0.14, y: hand.y + 0.06, w: 0.17, d: 0.14, h: 0.03 };
-    limb(f, pad, faces('#fdf8ec'));
+    const pad: Part = {
+      u: hand.u * 0.9,
+      v: hand.v + 0.14,
+      y: hand.y + 0.06,
+      h: 0.05,
+      r: 0.13,
+      rTop: 0.13,
+      roundTop: 0.35,
+      roundBottom: 0.35,
+    };
+    paint(f, pad, '#fdf8ec', { light: 0.6 });
     const at = spot(f, pad.u, pad.v, pad.y + pad.h);
     ctx.strokeStyle = 'rgba(160, 148, 128, 0.9)';
     ctx.lineWidth = 0.8;
@@ -1014,10 +1081,20 @@ function drawHeld(f: Figure, opts: PersonOptions, hand: Limb): void {
       ctx.stroke();
     }
   } else if (opts.prop === 'cloth') {
-    limb(
+    paint(
       f,
-      { u: hand.u * 1.05, v: hand.v + 0.12, y: hand.y - 0.02, w: 0.18, d: 0.16, h: 0.04 },
-      faces('#8fd0e8'),
+      {
+        u: hand.u * 1.05,
+        v: hand.v + 0.12,
+        y: hand.y - 0.02,
+        h: 0.06,
+        r: 0.14,
+        rTop: 0.13,
+        roundTop: 0.6,
+        roundBottom: 0.6,
+      },
+      '#8fd0e8',
+      { light: 0.6 },
     );
   } else if (opts.prop === 'pan') {
     const at = spot(f, hand.u * 0.9, hand.v + 0.2, hand.y + 0.06);
@@ -1202,15 +1279,15 @@ function wearsGlasses(look: Appearance): boolean {
 }
 
 /**
- * Eyes, brows, blush and mouth, painted onto the plane of the head the figure is
- * facing along. Nothing is drawn at all on the two away facings, where that
- * plane is pointing away from the camera.
+ * Eyes, brows, blush and mouth, painted onto the front of the rounded head and
+ * pushed round towards the way the figure is facing, so the features sit on the
+ * turn of the skull rather than square on the middle of it. Nothing is drawn at
+ * all on the two away facings, where the face is pointing away from the camera.
  */
-function drawFace(f: Figure, look: Appearance, head: Limb, time: number): void {
-  onPlane(f, head, f.front, (half, height) => {
+function drawFace(f: Figure, look: Appearance, head: Part, time: number): void {
+  onSurface(f, head, f.front, 0.19, 0.52, (half, height) => {
     const { ctx } = f;
-    const dx = half * 0.46;
-    const eyeY = height * 0.44;
+    const dx = half * 0.26;
     // Each figure gets a different `time` offset, so blinks never synchronise.
     const blinking = (time * 0.31) % 1 < 0.05;
 
@@ -1219,114 +1296,121 @@ function drawFace(f: Figure, look: Appearance, head: Limb, time: number): void {
       ctx.strokeStyle = '#3a2b21';
       ctx.lineWidth = 1.2 * f.s;
       ctx.beginPath();
-      ctx.moveTo(-dx - half * 0.24, eyeY);
-      ctx.lineTo(-dx + half * 0.24, eyeY);
-      ctx.moveTo(dx - half * 0.24, eyeY);
-      ctx.lineTo(dx + half * 0.24, eyeY);
+      ctx.moveTo(-dx - half * 0.15, 0);
+      ctx.lineTo(-dx + half * 0.15, 0);
+      ctx.moveTo(dx - half * 0.15, 0);
+      ctx.lineTo(dx + half * 0.15, 0);
       ctx.stroke();
     } else {
       ctx.fillStyle = '#fbf7ef';
       ctx.beginPath();
-      ctx.ellipse(-dx, eyeY, half * 0.31, height * 0.22, 0, 0, Math.PI * 2);
-      ctx.ellipse(dx, eyeY, half * 0.31, height * 0.22, 0, 0, Math.PI * 2);
+      ctx.ellipse(-dx, 0, half * 0.17, height * 0.15, 0, 0, Math.PI * 2);
+      ctx.ellipse(dx, 0, half * 0.17, height * 0.15, 0, 0, Math.PI * 2);
       ctx.fill();
       ctx.fillStyle = '#2b2118';
       ctx.beginPath();
-      ctx.arc(-dx + half * 0.05, eyeY + height * 0.02, half * 0.2, 0, Math.PI * 2);
-      ctx.arc(dx + half * 0.05, eyeY + height * 0.02, half * 0.2, 0, Math.PI * 2);
+      ctx.arc(-dx + half * 0.03, height * 0.02, half * 0.11, 0, Math.PI * 2);
+      ctx.arc(dx + half * 0.03, height * 0.02, half * 0.11, 0, Math.PI * 2);
       ctx.fill();
       ctx.fillStyle = 'rgba(255,255,255,0.92)';
       ctx.beginPath();
-      ctx.arc(-dx - half * 0.07, eyeY - height * 0.07, half * 0.075, 0, Math.PI * 2);
-      ctx.arc(dx - half * 0.07, eyeY - height * 0.07, half * 0.075, 0, Math.PI * 2);
+      ctx.arc(-dx - half * 0.045, -height * 0.05, half * 0.045, 0, Math.PI * 2);
+      ctx.arc(dx - half * 0.045, -height * 0.05, half * 0.045, 0, Math.PI * 2);
       ctx.fill();
     }
 
     ctx.strokeStyle = shade(look.hair, 0.7);
     ctx.lineWidth = 1.1 * f.s;
     ctx.beginPath();
-    ctx.moveTo(-dx - half * 0.26, eyeY - height * 0.19);
-    ctx.lineTo(-dx + half * 0.22, eyeY - height * 0.23);
-    ctx.moveTo(dx - half * 0.22, eyeY - height * 0.23);
-    ctx.lineTo(dx + half * 0.26, eyeY - height * 0.19);
+    ctx.moveTo(-dx - half * 0.18, -height * 0.155);
+    ctx.lineTo(-dx + half * 0.15, -height * 0.19);
+    ctx.moveTo(dx - half * 0.15, -height * 0.19);
+    ctx.lineTo(dx + half * 0.18, -height * 0.155);
     ctx.stroke();
 
     ctx.fillStyle = withAlpha('#e87a7a', 0.4);
     ctx.beginPath();
-    ctx.ellipse(-half * 0.76, eyeY + height * 0.2, half * 0.22, height * 0.09, 0, 0, Math.PI * 2);
-    ctx.ellipse(half * 0.76, eyeY + height * 0.2, half * 0.22, height * 0.09, 0, 0, Math.PI * 2);
+    ctx.ellipse(-half * 0.32, height * 0.14, half * 0.12, height * 0.06, 0, 0, Math.PI * 2);
+    ctx.ellipse(half * 0.32, height * 0.14, half * 0.12, height * 0.06, 0, 0, Math.PI * 2);
     ctx.fill();
 
     ctx.strokeStyle = 'rgba(80, 40, 30, 0.85)';
     ctx.lineWidth = 1.2 * f.s;
     ctx.beginPath();
-    ctx.arc(0, eyeY + height * 0.2, half * 0.4, 0.15 * Math.PI, 0.85 * Math.PI);
+    ctx.arc(0, height * 0.1, half * 0.21, 0.15 * Math.PI, 0.85 * Math.PI);
     ctx.stroke();
 
     if (wearsGlasses(look)) {
       ctx.strokeStyle = 'rgba(58, 46, 38, 0.9)';
       ctx.lineWidth = 0.9 * f.s;
       ctx.beginPath();
-      ctx.arc(-dx, eyeY, half * 0.42, 0, Math.PI * 2);
-      ctx.arc(dx, eyeY, half * 0.42, 0, Math.PI * 2);
-      ctx.moveTo(-dx + half * 0.42, eyeY);
-      ctx.lineTo(dx - half * 0.42, eyeY);
+      ctx.arc(-dx, 0, half * 0.2, 0, Math.PI * 2);
+      ctx.arc(dx, 0, half * 0.2, 0, Math.PI * 2);
+      ctx.moveTo(-dx + half * 0.2, 0);
+      ctx.lineTo(dx - half * 0.2, 0);
       ctx.stroke();
     }
   });
 }
 
 /**
- * Headgear by job, built as its own little volume on the crown. Silhouette does
- * the work: a tall toque, a peaked cap and a low bandana still tell you who is
- * who from across the room, and from behind, where no uniform is in view.
+ * Headgear by job, each its own rounded volume on the crown. Silhouette does the
+ * work: a tall toque, a peaked cap and a low bandana still tell you who is who
+ * from across the room, and from behind, where no uniform is in view.
  */
-function drawUniformHat(f: Figure, role: 'waiter' | 'chef' | 'cleaner', head: Limb): void {
+function drawUniformHat(f: Figure, role: 'waiter' | 'chef' | 'cleaner', head: Part): void {
   const crown = head.y + head.h;
-  const { ctx } = f;
 
   switch (role) {
     case 'chef': {
-      const band: Limb = { u: head.u, v: head.v, y: crown - 0.05, w: 0.5, d: 0.4, h: 0.09 };
-      limb(f, band, faces('#fffdf8'));
-      const at = spot(f, head.u, head.v, crown + 0.04);
-      isoCylinder(ctx, at.x, at.y, 0.26 * f.s, 0.2 * f.s, '#fdf9ef');
-      // A wider puff over the pleats, which is what makes a toque a toque.
-      isoEllipse(ctx, at.x, at.y - 0.2 * f.s * TILE_Z, 0.3 * f.s, '#fffefb');
+      // Toque: a band round the brow and a fat pleated puff standing over it,
+      // wider at the top than the bottom, which is what makes a toque a toque.
+      paint(
+        f,
+        { u: head.u, v: head.v, y: crown - 0.11, h: 0.13, r: head.r * 1.05, rTop: head.r * 1.02, roundTop: 0.35, roundBottom: 0.35 },
+        '#fdf9ef',
+        { outline: 0.34 },
+      );
+      paint(
+        f,
+        {
+          u: head.u,
+          v: head.v,
+          y: crown - 0.03,
+          h: 0.3,
+          r: head.r * 0.72,
+          rTop: head.r * 1.02,
+          roundTop: 1,
+          roundBottom: 0.5,
+          bulge: head.r * 0.2,
+        },
+        '#fffdf8',
+        { outline: 0.34 },
+      );
       break;
     }
     case 'waiter': {
       // Peaked cap: the bill is drawn first so the crown laps over its root.
-      limb(
+      paint(
         f,
-        { u: head.u, v: head.v + 0.3, y: crown - 0.06, w: 0.44, d: 0.2, h: 0.045 },
-        faces('#a12b23'),
+        { u: head.u, v: head.v + 0.24, y: crown - 0.11, h: 0.05, r: head.r * 0.6, rTop: head.r * 0.58, roundTop: 0.9, roundBottom: 0.9 },
+        '#a12b23',
       );
-      const cap: Limb = { u: head.u, v: head.v, y: crown - 0.07, w: 0.5, d: 0.4, h: 0.16 };
-      limb(f, cap, faces('#c73a2e'));
-      for (const plane of [f.front, f.back, f.flank]) {
-        onPlane(f, cap, plane, (half, height) => {
-          ctx.fillStyle = 'rgba(255, 232, 210, 0.5)';
-          ctx.fillRect(-half, height - 1.6 * f.s, half * 2, 1.6 * f.s);
-        });
-      }
+      paint(
+        f,
+        { u: head.u, v: head.v, y: crown - 0.12, h: 0.19, r: head.r * 1.07, rTop: head.r * 0.86, roundTop: 0.9, roundBottom: 0.3 },
+        '#c73a2e',
+      );
       break;
     }
     default: {
       // Bandana, wrapped low, with the knot out on the side the camera can see.
-      const wrap: Limb = { u: head.u, v: head.v, y: crown - 0.16, w: 0.49, d: 0.39, h: 0.2 };
-      limb(f, wrap, faces('#2f8b83'));
-      for (const plane of [f.front, f.back, f.flank]) {
-        onPlane(f, wrap, plane, (half, height) => {
-          ctx.fillStyle = 'rgba(126, 208, 196, 0.75)';
-          ctx.fillRect(-half, height - 2 * f.s, half * 2, 2 * f.s);
-        });
-      }
-      limb(
+      paint(
         f,
-        { u: head.u + 0.26, v: head.v - 0.06, y: crown - 0.15, w: 0.13, d: 0.11, h: 0.11 },
-        faces('#2a6f68'),
+        { u: head.u, v: head.v, y: crown - 0.2, h: 0.22, r: head.r * 1.06, rTop: head.r, roundTop: 0.45, roundBottom: 0.3 },
+        '#2f8b83',
       );
+      paint(f, pill(head.u + 0.26, head.v - 0.06, crown - 0.19, 0.13, 0.085), '#2a6f68');
       break;
     }
   }
@@ -1337,121 +1421,170 @@ function drawUniformHat(f: Figure, role: 'waiter' | 'chef' | 'cleaner', head: Li
  * no save data changes. Guests wearing something the staff never wear is what
  * keeps the two crowds apart at a glance.
  */
-function drawGuestExtra(f: Figure, look: Appearance, head: Limb, hip: number, lean: number): void {
+function drawGuestExtra(f: Figure, look: Appearance, head: Part, hip: number, lean: number): void {
   const pick = hashString(look.shirt + look.pants + look.hairStyle) % 6;
   const crown = head.y + head.h;
 
   if (pick === 0) {
     // Bobble hat: turned-up brim, dome, pom-pom.
-    limb(
+    paint(
       f,
-      { u: head.u, v: head.v, y: crown - 0.1, w: 0.52, d: 0.42, h: 0.15 },
-      faces(shade(look.shirt, 1.12)),
+      { u: head.u, v: head.v, y: crown - 0.15, h: 0.14, r: head.r * 1.09, rTop: head.r * 1.05, roundTop: 0.4, roundBottom: 0.4 },
+      shade(look.shirt, 1.12),
     );
-    const at = spot(f, head.u, head.v, crown + 0.04);
-    isoCylinder(f.ctx, at.x, at.y, 0.22 * f.s, 0.12 * f.s, look.shirt);
-    f.ctx.fillStyle = '#fff6e4';
-    f.ctx.beginPath();
-    f.ctx.arc(at.x, at.y - (0.12 * f.s * TILE_Z + 2.2 * f.s), 2.6 * f.s, 0, Math.PI * 2);
-    f.ctx.fill();
+    paint(
+      f,
+      { u: head.u, v: head.v, y: crown - 0.04, h: 0.14, r: head.r * 0.94, rTop: head.r * 0.42, roundTop: 0.95, roundBottom: 0.3 },
+      look.shirt,
+    );
+    paint(
+      f,
+      { u: head.u, v: head.v, y: crown + 0.06, h: 0.1, r: 0.075, rTop: 0.075, roundTop: 1, roundBottom: 1 },
+      '#fff6e4',
+    );
   } else if (pick === 1) {
     // Scarf, round the neck with the tail hanging down the front. Darker than the
     // shirt it is picked from, or the two would read as one garment.
-    limb(
+    paint(
       f,
-      { u: head.u, v: head.v, y: hip + 0.32, w: 0.36, d: 0.3, h: 0.11 },
-      faces(shade(look.shirt, 0.58)),
+      { u: head.u, v: head.v, y: hip + 0.27, h: 0.14, r: 0.19, rTop: 0.165, roundTop: 0.6, roundBottom: 0.5 },
+      shade(look.shirt, 0.58),
     );
     if (f.front) {
-      limb(
+      paint(
         f,
-        { u: head.u + 0.06, v: lean + 0.15, y: hip + 0.08, w: 0.1, d: 0.06, h: 0.24 },
-        faces(shade(look.shirt, 0.52)),
+        { u: head.u + 0.05, v: lean + 0.13, y: hip + 0.03, h: 0.27, r: 0.065, rTop: 0.06, roundTop: 0.5, roundBottom: 0.9 },
+        shade(look.shirt, 0.52),
       );
     }
   }
 }
 
 /**
- * Hair that hangs behind the head, drawn before it so the head sits in front of
- * its own hair rather than inside it.
+ * Hair that hangs behind or around the head, drawn before it so what shows is
+ * only the part sitting outside the skull. Which is also how a bald head gets its
+ * horseshoe: a band a shade wider than the head, with the head then drawn over
+ * everything but its rim.
  */
-function drawHairBack(f: Figure, look: Appearance, head: Limb): void {
-  const crown = head.y + head.h;
+function drawHairBack(f: Figure, look: Appearance, head: Part): void {
   if (look.hairStyle === 'long') {
-    // A mass a little wider than the head and deeper behind it, so the hair
-    // frames the face on both sides and falls to the shoulders at the back. It
-    // narrows on the way down rather than ending in a square hem.
-    limb(
+    // A mass wider than the head at the crown and set back from it, falling to
+    // the shoulders and narrowing on the way down rather than ending in a hem.
+    paint(
       f,
-      { u: head.u, v: head.v - 0.05, y: crown - 0.5, w: 0.44, d: 0.34, h: 0.26 },
-      faces(shade(look.hair, 0.94)),
-    );
-    limb(
-      f,
-      { u: head.u, v: head.v - 0.05, y: crown - 0.28, w: 0.5, d: 0.4, h: 0.28 },
-      faces(look.hair),
+      {
+        u: head.u,
+        v: head.v - 0.04,
+        y: head.y - 0.24,
+        h: head.h * 1.22,
+        r: head.r * 0.82,
+        rTop: head.r * 1.06,
+        roundTop: 0.7,
+        roundBottom: 0.85,
+        bulge: head.r * 0.06,
+      },
+      look.hair,
     );
   } else if (look.hairStyle === 'bun') {
     // High enough on the back of the head to break the crown line, or a bun would
     // be a style you could only tell somebody had from behind.
-    const at = spot(f, head.u, head.v - 0.16, crown - 0.04);
-    isoCylinder(f.ctx, at.x, at.y, 0.14 * f.s, 0.16 * f.s, look.hair);
+    paint(
+      f,
+      {
+        u: head.u,
+        v: head.v - 0.2,
+        y: head.y + head.h * 0.8,
+        h: head.h * 0.42,
+        r: head.r * 0.34,
+        rTop: head.r * 0.32,
+        roundTop: 1,
+        roundBottom: 1,
+      },
+      look.hair,
+    );
+  } else if (look.hairStyle === 'bald') {
+    paint(
+      f,
+      {
+        u: head.u,
+        v: head.v,
+        y: head.y + head.h * 0.14,
+        h: head.h * 0.42,
+        r: head.r * 1.06,
+        rTop: head.r * 1.05,
+        roundTop: 0.5,
+        roundBottom: 0.5,
+      },
+      look.hair,
+    );
   }
 }
 
 /**
- * The hair on top of the head, as two slabs: a band round the skull and a
- * narrower one above it. The step is what rounds off the crown, so a head reads
- * as a head rather than as a cube — which is also why a bald one gets the same
- * step in skin, with the hair painted round the back and sides instead.
+ * The hair on the crown: one rounded cap a shade wider than the skull, sitting
+ * proud of it. The step where it meets the forehead is what gives a round head a
+ * hairline, so a head reads as a head and not as an egg.
  */
-function drawHair(f: Figure, look: Appearance, head: Limb): void {
-  const crown = head.y + head.h;
-  const hair = faces(look.hair);
-  const band: Limb = { u: head.u, v: head.v, y: crown - 0.09, w: 0.48, d: 0.38, h: 0.12 };
-  const top: Limb = { u: head.u, v: head.v, y: crown + 0.01, w: 0.4, d: 0.3, h: 0.07 };
+function drawHair(f: Figure, look: Appearance, head: Part): void {
+  if (look.hairStyle === 'bald') return;
 
-  if (look.hairStyle === 'bald') {
-    limb(f, top, volume(f, look.skin));
-    for (const plane of [f.back, f.flank]) {
-      onPlane(f, head, plane, (half, height) => {
-        f.ctx.fillStyle = look.hair;
-        f.ctx.fillRect(-half, height * 0.26, half * 2, height * 0.3);
-      });
-    }
-    return;
-  }
+  const cap: Part = {
+    u: head.u,
+    v: head.v,
+    y: head.y + head.h * 0.5,
+    h: head.h * 0.55,
+    // A shade wider than the skull, so the hair wraps the sides of the head, with
+    // a generously rounded hairline: cut that square and the outline along it
+    // turns into a swimming cap strapped over the brows.
+    r: head.r * 1.05,
+    rTop: head.r * 0.72,
+    roundTop: 0.9,
+    roundBottom: 0.66,
+    bulge: head.r * 0.04,
+  };
 
   switch (look.hairStyle) {
     case 'cap':
-      // A flat, wide crop with no step, which reads as a blunt fringe.
-      limb(f, { ...band, w: 0.52, d: 0.42, h: 0.16 }, hair);
+      // The same cap dropped low with a flat hairline, which reads as a blunt
+      // fringe cut straight across the brow.
+      paint(
+        f,
+        { ...cap, y: head.y + head.h * 0.38, h: head.h * 0.67, rTop: head.r * 0.84, roundBottom: 0.12 },
+        look.hair,
+      );
       break;
     case 'curly': {
-      limb(f, band, hair);
-      // Curls round the crown, far side first so the near ones lap over them.
+      paint(f, { ...cap, h: head.h * 0.45, rTop: head.r * 0.86 }, look.hair);
+      // Puffs round the crown, far side first so the near ones lap over them.
       // None of them stray forward over the face.
-      const curls: Array<[number, number]> = [
-        [-0.2, -0.1],
-        [-0.14, 0.09],
-        [0, -0.14],
-        [0.06, 0.1],
-        [0.2, -0.05],
+      const puffs: Array<[number, number]> = [
+        [-0.26, -0.08],
+        [-0.16, 0.12],
+        [0, -0.16],
+        [0.1, 0.12],
+        [0.26, -0.04],
       ];
-      for (const [u, v] of curls) {
-        limb(
+      for (const [u, v] of puffs) {
+        paint(
           f,
-          { u: head.u + u, v: head.v + v, y: crown - 0.02, w: 0.15, d: 0.14, h: 0.11 },
-          faces(shade(look.hair, u > 0 ? 1.07 : 0.93)),
+          {
+            u: head.u + u,
+            v: head.v + v,
+            y: head.y + head.h * 0.84,
+            h: head.h * 0.24,
+            r: head.r * 0.26,
+            rTop: head.r * 0.26,
+            roundTop: 1,
+            roundBottom: 1,
+          },
+          shade(look.hair, u > 0 ? 1.07 : 0.93),
         );
       }
       break;
     }
     default:
-      // Short, bun and long all share the same stepped crown.
-      limb(f, band, hair);
-      limb(f, top, hair);
+      // Short, bun and long all share the same rounded cap.
+      paint(f, cap, look.hair);
       break;
   }
 }
@@ -1465,6 +1598,11 @@ function drawTray(ctx: CanvasRenderingContext2D, dish: Dish): void {
   ctx.beginPath();
   ctx.ellipse(0, -1, 8.5, 3.6, 0, 0, Math.PI * 2);
   ctx.fill();
+  ctx.strokeStyle = ink('#8d6b45', 0.45);
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.ellipse(0, 0, 11, 5, 0, 0, Math.PI * 2);
+  ctx.stroke();
   drawPlatedDish(ctx, dish, 0, -3, 0.62);
 }
 
@@ -1501,6 +1639,11 @@ export function drawPlatedDish(
   ctx.restore();
 }
 
+/**
+ * The plate under a meal. It carries the same dark rim the people and the
+ * furniture do, so a dish on a table is not the one crisp-edged thing in a room
+ * of softly lined shapes.
+ */
 function drawPlateBase(ctx: CanvasRenderingContext2D, style: PlateStyle): void {
   if (style === 'cup') return;
   // A contact shadow is what stops plates looking like stickers on the table.
@@ -1508,6 +1651,14 @@ function drawPlateBase(ctx: CanvasRenderingContext2D, style: PlateStyle): void {
   ctx.beginPath();
   ctx.ellipse(1, 1.6, 13, 5.4, 0, 0, Math.PI * 2);
   ctx.fill();
+
+  const rim = (rx: number, ry: number): void => {
+    ctx.strokeStyle = ink('#fdfaf2', 0.4);
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
+    ctx.stroke();
+  };
 
   if (style === 'bowl' || style === 'salad') {
     ctx.fillStyle = '#fdfaf2';
@@ -1518,6 +1669,7 @@ function drawPlateBase(ctx: CanvasRenderingContext2D, style: PlateStyle): void {
     ctx.beginPath();
     ctx.ellipse(0, 0.4, 9.6, 4.4, 0, 0, Math.PI * 2);
     ctx.fill();
+    rim(12.5, 6.2);
     return;
   }
   ctx.fillStyle = '#fdfaf2';
@@ -1533,6 +1685,7 @@ function drawPlateBase(ctx: CanvasRenderingContext2D, style: PlateStyle): void {
   ctx.beginPath();
   ctx.ellipse(0, -0.6, 12.6, 5.4, 0, Math.PI * 1.05, Math.PI * 1.95);
   ctx.stroke();
+  rim(14, 6.4);
 }
 
 function drawFood(
