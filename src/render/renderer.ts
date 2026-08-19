@@ -1124,7 +1124,7 @@ export class Renderer {
       if (c.regularId !== null) {
         overlays.push({
           depth: depthOf(c.tx, c.ty, 6),
-          draw: () => this.nameTag(c.name, w.x, w.y - 2.7 * TILE_Z),
+          draw: () => this.nameTag(c.name, w.x, w.y - 2.92 * TILE_Z),
         });
       }
     }
@@ -1145,6 +1145,7 @@ export class Renderer {
             role: s.role,
             carrying: dish,
             prop: this.staffProp(s),
+            exhausted: s.state === 'exhausted',
           }),
       });
       overlays.push({
@@ -1202,7 +1203,9 @@ export class Renderer {
     if (c.state === 'leaving' || c.state === 'walkingToSeat' || c.state === 'entering') return;
 
     const r = 15;
-    const top = y - 2.16 * TILE_Z + Math.sin(time * 1.8 + c.id) * 0.8;
+    // High enough that the bubble clears the tallest head under it; the tail is
+    // what reaches back down to the guest.
+    const top = y - 2.38 * TILE_Z + Math.sin(time * 1.8 + c.id) * 0.8;
     const showPatience =
       c.state === 'queueing' || c.state === 'awaitingWaiter' || c.state === 'awaitingFood';
 

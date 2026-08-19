@@ -28,6 +28,7 @@ import { INGREDIENTS, INGREDIENT_LIST } from '../src/game/data/ingredients';
 import { REGULARS, REGULARS_BY_ID } from '../src/game/data/regulars';
 import { Grid } from '../src/game/grid';
 import { findPath } from '../src/game/path';
+import { UNIFORM } from '../src/game/data/people';
 import { appearanceFrom } from '../src/game/people';
 import {
   DAY_LENGTH,
@@ -61,10 +62,11 @@ import {
   SAVE_VERSION,
   slotInfo,
 } from '../src/game/state';
-import type { Order, SaveData, Staff } from '../src/game/types';
+import type { Appearance, Order, SaveData, Staff, StaffRole } from '../src/game/types';
 import { buildingBox } from '../src/render/renderer';
 import { planeOrigin, planStreetBuilding, roofSeam } from '../src/render/scenery';
-import { diamondCorners } from '../src/render/shapes';
+import { diamondCorners, faces, shade } from '../src/render/shapes';
+import { drawPerson, type PersonOptions } from '../src/render/sprites';
 import { nextCelebration } from '../src/ui/cards';
 import {
   coachAction,
@@ -1137,6 +1139,350 @@ group('A tap on the pixels a guest is drawn at seats that guest', () => {
       grid.anyAt(Math.floor(offBadge.tx + back), Math.floor(offBadge.ty + back))?.uid === table.uid;
   }
   check('walking back down the diagonal finds the table', foundTable);
+});
+
+// ------------------------------------------------------------------- figures
+
+/** One fill or stroke a sprite made: the colour, and the box it covered. */
+interface Paint {
+  color: string;
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+}
+
+/**
+ * Just enough of a 2D context to record what a sprite paints. Every path point
+ * goes through the same transform stack the browser would apply, so a shape
+ * drawn on a skewed plane is recorded where it actually lands on the canvas.
+ *
+ * This is what lets the checks below ask whether a person is built out of solid
+ * volumes — several shades of the same colour, in a stack of small boxes — rather
+ * than out of one flat disc with a face on it.
+ */
+class Recorder {
+  readonly fills: Paint[] = [];
+  readonly strokes: Paint[] = [];
+  fillStyle: string = '#000';
+  strokeStyle: string = '#000';
+  lineWidth = 1;
+  lineCap = 'butt';
+  lineJoin = 'miter';
+  globalAlpha = 1;
+  globalCompositeOperation = 'source-over';
+  font = '';
+  textAlign = 'left';
+  textBaseline = 'alphabetic';
+
+  /** Current transform, in canvas order [a, b, c, d, e, f]. */
+  private m: number[] = [1, 0, 0, 1, 0, 0];
+  private stack: number[][] = [];
+  private path: Paint | null = null;
+
+  save(): void {
+    this.stack.push([...this.m]);
+  }
+
+  restore(): void {
+    const m = this.stack.pop();
+    if (m) this.m = m;
+  }
+
+  transform(a: number, b: number, c: number, d: number, e: number, f: number): void {
+    const [a0, b0, c0, d0, e0, f0] = this.m as [number, number, number, number, number, number];
+    this.m = [
+      a0 * a + c0 * b,
+      b0 * a + d0 * b,
+      a0 * c + c0 * d,
+      b0 * c + d0 * d,
+      a0 * e + c0 * f + e0,
+      b0 * e + d0 * f + f0,
+    ];
+  }
+
+  translate(x: number, y: number): void {
+    this.transform(1, 0, 0, 1, x, y);
+  }
+
+  scale(x: number, y: number): void {
+    this.transform(x, 0, 0, y, 0, 0);
+  }
+
+  rotate(angle: number): void {
+    const c = Math.cos(angle);
+    const s = Math.sin(angle);
+    this.transform(c, s, -s, c, 0, 0);
+  }
+
+  beginPath(): void {
+    this.path = null;
+  }
+
+  closePath(): void {
+    /* nothing to record */
+  }
+
+  clip(): void {
+    /* clipping only ever shrinks what lands, which these checks do not model */
+  }
+
+  moveTo(x: number, y: number): void {
+    this.at(x, y);
+  }
+
+  lineTo(x: number, y: number): void {
+    this.at(x, y);
+  }
+
+  quadraticCurveTo(cx: number, cy: number, x: number, y: number): void {
+    this.at(cx, cy);
+    this.at(x, y);
+  }
+
+  arcTo(x1: number, y1: number, x2: number, y2: number, _r: number): void {
+    this.at(x1, y1);
+    this.at(x2, y2);
+  }
+
+  arc(x: number, y: number, r: number, _a0?: number, _a1?: number, _ccw?: boolean): void {
+    this.box(x, y, r, r);
+  }
+
+  ellipse(
+    x: number,
+    y: number,
+    rx: number,
+    ry: number,
+    _rot?: number,
+    _a0?: number,
+    _a1?: number,
+    _ccw?: boolean,
+  ): void {
+    this.box(x, y, rx, ry);
+  }
+
+  rect(x: number, y: number, w: number, h: number): void {
+    this.at(x, y);
+    this.at(x + w, y + h);
+  }
+
+  fill(): void {
+    if (this.path) this.fills.push({ ...this.path, color: String(this.fillStyle) });
+  }
+
+  stroke(): void {
+    if (this.path) this.strokes.push({ ...this.path, color: String(this.strokeStyle) });
+  }
+
+  fillRect(x: number, y: number, w: number, h: number): void {
+    const held = this.path;
+    this.path = null;
+    this.at(x, y);
+    this.at(x + w, y + h);
+    this.fill();
+    this.path = held;
+  }
+
+  fillText(): void {
+    /* no text on a person */
+  }
+
+  measureText(): { width: number } {
+    return { width: 0 };
+  }
+
+  createRadialGradient(): { addColorStop: () => void } {
+    return { addColorStop: () => undefined };
+  }
+
+  createLinearGradient(): { addColorStop: () => void } {
+    return { addColorStop: () => undefined };
+  }
+
+  /** The box every recorded fill and stroke together covers. */
+  bounds(): Paint {
+    const all = [...this.fills, ...this.strokes];
+    return {
+      color: '',
+      minX: Math.min(...all.map((p) => p.minX)),
+      minY: Math.min(...all.map((p) => p.minY)),
+      maxX: Math.max(...all.map((p) => p.maxX)),
+      maxY: Math.max(...all.map((p) => p.maxY)),
+    };
+  }
+
+  /** The box the fills of one colour cover, or null when it was never used. */
+  where(color: string): Paint | null {
+    const hits = this.fills.filter((p) => p.color === color);
+    if (!hits.length) return null;
+    return {
+      color,
+      minX: Math.min(...hits.map((p) => p.minX)),
+      minY: Math.min(...hits.map((p) => p.minY)),
+      maxX: Math.max(...hits.map((p) => p.maxX)),
+      maxY: Math.max(...hits.map((p) => p.maxY)),
+    };
+  }
+
+  private at(x: number, y: number): void {
+    const [a, b, c, d, e, f] = this.m as [number, number, number, number, number, number];
+    this.grow(a * x + c * y + e, b * x + d * y + f);
+  }
+
+  private box(x: number, y: number, rx: number, ry: number): void {
+    this.at(x - rx, y - ry);
+    this.at(x + rx, y + ry);
+    this.at(x - rx, y + ry);
+    this.at(x + rx, y - ry);
+  }
+
+  private grow(x: number, y: number): void {
+    if (!this.path) {
+      this.path = { color: '', minX: x, minY: y, maxX: x, maxY: y };
+      return;
+    }
+    this.path.minX = Math.min(this.path.minX, x);
+    this.path.minY = Math.min(this.path.minY, y);
+    this.path.maxX = Math.max(this.path.maxX, x);
+    this.path.maxY = Math.max(this.path.maxY, y);
+  }
+}
+
+function paintPerson(look: Appearance, opts: PersonOptions): Recorder {
+  const rec = new Recorder();
+  drawPerson(rec as unknown as CanvasRenderingContext2D, look, 0, 0, opts);
+  return rec;
+}
+
+/**
+ * How many distinct shades of `base` a sprite painted. `shade` is the one ramp
+ * the whole game lights its boxes with, so walking it is how a check can tell a
+ * shaded volume from a flat fill without knowing which multipliers were used.
+ */
+function shadesOf(base: string, rec: Recorder): number {
+  const ramp = new Set<string>();
+  for (let k = 0.4; k <= 1.5; k += 0.005) ramp.add(shade(base, k));
+  const found = new Set<string>();
+  for (const p of rec.fills) if (ramp.has(p.color)) found.add(p.color);
+  return found.size;
+}
+
+group('People are drawn as isometric volumes, not as flat discs', () => {
+  // These colours land a guest without a hat or a scarf, so the only thing
+  // painting in shades of the shirt is the body wearing it.
+  const look: Appearance = {
+    skin: '#d8a179',
+    hair: '#2b2118',
+    hairStyle: 'short',
+    shirt: '#e85a3c',
+    pants: '#3a4a62',
+    build: 1,
+  };
+  const standing: PersonOptions = { facing: 'se', time: 0.4, walking: false, sitting: false };
+  const front = paintPerson(look, standing);
+
+  check(
+    'a figure is made of many separate pieces',
+    front.fills.length > 40,
+    `${front.fills.length} fills`,
+  );
+  // A box in this world is a lit lid over two shaded sides, and the lid is the
+  // tell: a flat sprite has no top for the light to catch.
+  for (const [part, base] of [
+    ['shirt', look.shirt],
+    ['skin', look.skin],
+    ['trousers', look.pants],
+    ['hair', look.hair],
+  ] as Array<[string, string]>) {
+    const lit = faces(base);
+    check(`the ${part} has a lit top face`, front.where(lit.top) !== null, lit.top);
+    check(`the ${part} has a side face in shadow`, front.where(lit.left) !== null, lit.left);
+    const shades = shadesOf(base, front);
+    check(`the ${part} is painted in three shades or more`, shades >= 3, `${shades} shades`);
+  }
+
+  // Nothing may drift away from the tile the figure is standing on, or taps —
+  // which are matched against that tile, not against these pixels — would miss.
+  const box = front.bounds();
+  const midX = (box.minX + box.maxX) / 2;
+  check('the figure is centred on its tile', Math.abs(midX) < 6, `${midX.toFixed(1)}px off`);
+  check('it stands on the tile plane', box.maxY < 8 && box.maxY > -2, `${box.maxY.toFixed(1)}`);
+  check(
+    'it is about as tall as a person',
+    box.minY < -38 && box.minY > -60,
+    `${(-box.minY).toFixed(1)}px tall`,
+  );
+  check(
+    'it is no wider than a tile',
+    box.maxX - box.minX < TILE_W,
+    `${(box.maxX - box.minX).toFixed(1)}px wide`,
+  );
+  // The thought bubble hangs at 2.38 tile-heights and is 15px across, so anything
+  // above this line would be drawn through it.
+  check(
+    'it leaves the thought bubble room',
+    box.minY > -2.38 * TILE_Z + 15,
+    `${(-box.minY).toFixed(1)}px tall`,
+  );
+
+  // The face is painted on whichever plane of the head the figure is facing
+  // along, so which side of the head the eyes land on follows the facing.
+  const WHITE = '#fbf7ef';
+  const rightward = front.where(WHITE);
+  const leftward = paintPerson(look, { ...standing, facing: 'sw' }).where(WHITE);
+  check('a figure facing right has its eyes on the right-hand plane', !!rightward && rightward.minX > 0);
+  check('a figure facing left has them on the left-hand plane', !!leftward && leftward.maxX < 0);
+  for (const facing of ['ne', 'nw'] as const) {
+    const away = paintPerson(look, { ...standing, facing });
+    check(`a figure facing ${facing} shows the back of its head`, away.where(WHITE) === null);
+    check(`it is still a whole figure facing ${facing}`, away.fills.length > 40);
+  }
+
+  // Poses have to move something, or the walk cycle is a decoration.
+  const stepA = paintPerson(look, { ...standing, walking: true, time: 0.18 });
+  const stepB = paintPerson(look, { ...standing, walking: true, time: 0.52 });
+  check(
+    'the walk cycle actually moves the legs',
+    Math.abs(stepA.bounds().maxX - stepB.bounds().maxX) > 1 ||
+      Math.abs(stepA.bounds().minX - stepB.bounds().minX) > 1,
+  );
+
+  const seated = paintPerson(look, { ...standing, sitting: true });
+  const shoes = '#42332a';
+  const standingFeet = front.where(shade(shoes, 1.18));
+  const seatedFeet = seated.where(shade(shoes, 1.18));
+  check('a seated figure still has feet on the floor', !!seatedFeet && seatedFeet.maxY > -6);
+  check(
+    'sitting folds the legs out in front',
+    !!standingFeet && !!seatedFeet && seatedFeet.maxX > standingFeet.maxX + 3,
+  );
+
+  // A carried dish is on the tray, not somewhere near the figure.
+  const carried = paintPerson(look, {
+    ...standing,
+    uniform: UNIFORM.waiter,
+    role: 'waiter',
+    carrying: DISHES[0]!,
+  });
+  const plate = carried.where('#fdfaf2');
+  check('a carried dish is plated', !!plate);
+  check(
+    'and the plate is up at tray height',
+    !!plate && plate.maxY < -0.4 * TILE_Z && plate.maxY > -1.4 * TILE_Z,
+    plate ? `${(-plate.maxY).toFixed(1)}px up` : '',
+  );
+
+  // Each job keeps a silhouette of its own, from any angle.
+  const heights = (role: StaffRole): number =>
+    -paintPerson(look, { ...standing, uniform: UNIFORM[role], role }).bounds().minY;
+  check('a chef stands taller in the hat than a guest', heights('chef') > -front.bounds().minY + 3);
+  check('the cleaner is not wearing the chef hat', heights('cleaner') < heights('chef'));
+  for (const role of ['waiter', 'chef', 'cleaner'] as StaffRole[]) {
+    const spent = paintPerson(look, { ...standing, uniform: UNIFORM[role], role, exhausted: true });
+    const fresh = paintPerson(look, { ...standing, uniform: UNIFORM[role], role });
+    check(`a spent ${role} slumps`, spent.bounds().minY > fresh.bounds().minY);
+  }
 });
 
 group('Tapping a dirty table sends somebody to wipe it', () => {
