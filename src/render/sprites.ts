@@ -1461,10 +1461,8 @@ function drawGuestExtra(f: Figure, look: Appearance, head: Part, hip: number, le
 }
 
 /**
- * Hair that hangs behind or around the head, drawn before it so what shows is
- * only the part sitting outside the skull. Which is also how a bald head gets its
- * horseshoe: a band a shade wider than the head, with the head then drawn over
- * everything but its rim.
+ * Hair that hangs behind the head, drawn before it so the head sits in front of
+ * its own hair rather than inside it.
  */
 function drawHairBack(f: Figure, look: Appearance, head: Part): void {
   if (look.hairStyle === 'long') {
@@ -1502,18 +1500,26 @@ function drawHairBack(f: Figure, look: Appearance, head: Part): void {
       },
       look.hair,
     );
-  } else if (look.hairStyle === 'bald') {
+  }
+}
+
+/**
+ * What is left of a bald head's hair: a tuft above each ear, drawn after the head
+ * because a horseshoe hidden behind a skull this round shows as nothing at all.
+ */
+function drawSideHair(f: Figure, look: Appearance, head: Part): void {
+  for (const side of [-1, 1] as const) {
     paint(
       f,
       {
-        u: head.u,
-        v: head.v,
-        y: head.y + head.h * 0.14,
-        h: head.h * 0.42,
-        r: head.r * 1.06,
-        rTop: head.r * 1.05,
-        roundTop: 0.5,
-        roundBottom: 0.5,
+        u: head.u + side * head.r * 0.88,
+        v: head.v - 0.02,
+        y: head.y + head.h * 0.16,
+        h: head.h * 0.34,
+        r: head.r * 0.17,
+        rTop: head.r * 0.19,
+        roundTop: 0.8,
+        roundBottom: 0.9,
       },
       look.hair,
     );
@@ -1526,7 +1532,10 @@ function drawHairBack(f: Figure, look: Appearance, head: Part): void {
  * hairline, so a head reads as a head and not as an egg.
  */
 function drawHair(f: Figure, look: Appearance, head: Part): void {
-  if (look.hairStyle === 'bald') return;
+  if (look.hairStyle === 'bald') {
+    drawSideHair(f, look, head);
+    return;
+  }
 
   const cap: Part = {
     u: head.u,
