@@ -818,7 +818,10 @@ function drumOutline(
   ctx.stroke();
 }
 
-/** A recessed panel or two across the front faces of a carcass. */
+/**
+ * Panelling across the front faces of a carcass: a rail under the top and a pair
+ * of stiles down each face, which is what stops a counter reading as a crate.
+ */
 function frontPanels(
   ctx: CanvasRenderingContext2D,
   cx: number,
@@ -828,18 +831,23 @@ function frontPanels(
   colour: string,
 ): void {
   const c = diamondCorners(cx, cy, size, size, height);
+  const h = height * TILE_Z;
   ctx.strokeStyle = colour;
   ctx.lineWidth = 1.4;
   for (const [a, b] of [
     [c.w, c.s],
     [c.s, c.e],
   ] as const) {
-    for (const t of [0.22, 0.78]) {
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y + h * 0.16);
+    ctx.lineTo(b.x, b.y + h * 0.16);
+    ctx.stroke();
+    for (const t of [0.24, 0.76]) {
       const x = a.x + (b.x - a.x) * t;
       const y = a.y + (b.y - a.y) * t;
       ctx.beginPath();
-      ctx.moveTo(x, y + height * TILE_Z * 0.16);
-      ctx.lineTo(x, y + height * TILE_Z * 0.8);
+      ctx.moveTo(x, y + h * 0.24);
+      ctx.lineTo(x, y + h * 0.82);
       ctx.stroke();
     }
   }
