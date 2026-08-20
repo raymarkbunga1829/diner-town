@@ -16,7 +16,7 @@ import {
 } from './game/sim';
 import { createNewGame, Game } from './game/state';
 import type { Customer, Placed } from './game/types';
-import { buildingBox, Renderer, type BuildPreview } from './render/renderer';
+import { buildingBox, Renderer, STREET_IN_FRAME, type BuildPreview } from './render/renderer';
 import type {
   AppApi,
   ConfirmOptions,
@@ -139,8 +139,14 @@ class App implements AppApi {
    */
   private centreCamera(snap = false): void {
     const { viewW, viewH } = this.camera;
-    const box = buildingBox(this.game.data.gridSize);
     const portrait = viewH > viewW * 1.3;
+    // The frame reaches across the street to the shops opposite, which is the
+    // composition the art was approved on. On a phone it reaches less far: there
+    // is no room to give away, and the dining room is what has to stay legible.
+    const box = buildingBox(
+      this.game.data.gridSize,
+      portrait ? STREET_IN_FRAME * 0.42 : STREET_IN_FRAME,
+    );
     // Roughly what the status pills and the dock cover at each layout.
     const insetTop = portrait ? 112 : 66;
     const insetBottom = portrait ? 104 : 96;

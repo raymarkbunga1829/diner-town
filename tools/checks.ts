@@ -23,7 +23,7 @@ import {
   MAX_DISH_LEVEL,
   type Dish,
 } from '../src/game/data/dishes';
-import { FURNITURE, FURNITURE_BY_ID } from '../src/game/data/furniture';
+import { FURNITURE, FURNITURE_BY_ID, type FurnitureDef } from '../src/game/data/furniture';
 import { INGREDIENTS, INGREDIENT_LIST } from '../src/game/data/ingredients';
 import { REGULARS, REGULARS_BY_ID } from '../src/game/data/regulars';
 import { Grid } from '../src/game/grid';
@@ -63,9 +63,34 @@ import {
   slotInfo,
 } from '../src/game/state';
 import type { Appearance, Order, SaveData, Staff, StaffRole } from '../src/game/types';
-import { buildingBox } from '../src/render/renderer';
-import { planeOrigin, planStreetBuilding, roofSeam } from '../src/render/scenery';
-import { diamondCorners, faces, ink, shade } from '../src/render/shapes';
+import { inkOf, SHEET } from '../src/render/art';
+import {
+  artFor,
+  DISH_ART,
+  DISH_SPRITES,
+  drawPlatedDish,
+  PLATE_ART,
+  type DishArtId,
+} from '../src/render/plates';
+import {
+  drawFurniture,
+  drawWallItem,
+  isWallProp,
+  PROP_SPRITES,
+  propSpriteFor,
+  WALL_PROP_IDS,
+  type FurnitureDrawOptions,
+} from '../src/render/props';
+import { buildingBox, STREET_IN_FRAME, STREET_PLAN } from '../src/render/renderer';
+import {
+  planeOrigin,
+  planShopRow,
+  planStreetBuilding,
+  roofSeam,
+  tradeAt,
+  TRADES,
+} from '../src/render/scenery';
+import { diamondCorners, faces, shade } from '../src/render/shapes';
 import { drawPerson, type PersonOptions } from '../src/render/sprites';
 import { nextCelebration } from '../src/ui/cards';
 import {
@@ -1469,8 +1494,8 @@ group('People are rounded 2.5D volumes, not boxes and not flat discs', () => {
     check(`the ${part} has a flank in shadow`, front.where(lit.left) !== null, lit.left);
     check(
       `the ${part} is held together by a dark outline`,
-      front.strokes.some((p) => p.color === ink(base)),
-      ink(base),
+      front.strokes.some((p) => p.color === inkOf(base)),
+      inkOf(base),
     );
     const shades = shadesOf(base, front);
     check(`the ${part} is painted in three shades or more`, shades >= 3, `${shades} shades`);
@@ -1585,6 +1610,373 @@ group('People are rounded 2.5D volumes, not boxes and not flat discs', () => {
     const fresh = paintPerson(look, { ...standing, uniform: UNIFORM[role], role });
     check(`a spent ${role} slumps`, spent.bounds().minY > fresh.bounds().minY);
   }
+});
+
+/**
+ * The approved people sheet is a cast, not a silhouette: a chef in a toque with
+ * a moustache, a waiter in a sky-blue waistcoat and a peaked cap with a D on it,
+ * a cleaner in a mint apron and headscarf, and guests who between them wear a
+ * flower, a flat cap, a hood, a scarf and a striped shirt. All of it has to
+ * survive every pose the simulation puts a figure in, and every facing —
+ * including the two that show the back of a head — so this walks the lot.
+ */
+group('Every character on the people sheet draws in every pose', () => {
+  const look: Appearance = {
+    skin: '#d8a179',
+    hair: '#2b2118',
+    hairStyle: 'short',
+    shirt: '#e85a3c',
+    pants: '#3a4a62',
+    build: 1,
+  };
+  const facings = ['se', 'sw', 'ne', 'nw'] as const;
+  const poses: Array<[string, Partial<PersonOptions>]> = [
+    ['standing', {}],
+    ['walking', { walking: true, time: 0.18 }],
+    ['sitting', { sitting: true }],
+    ['exhausted', { exhausted: true }],
+    ['carrying', { carrying: DISHES[0]! }],
+    ['with a notepad', { prop: 'notepad' }],
+    ['with a cloth', { prop: 'cloth' }],
+    ['with a pan', { prop: 'pan' }],
+    ['faded', { alpha: 0.5 }],
+  ];
+  const roles: Array<StaffRole | undefined> = [undefined, 'waiter', 'chef', 'cleaner'];
+
+  let drawn = 0;
+  const thin: string[] = [];
+  const adrift: string[] = [];
+  const boxy: string[] = [];
+  for (const facing of facings) {
+    for (const [name, pose] of poses) {
+      for (const role of roles) {
+        drawn++;
+        const rec = paintPerson(look, {
+          facing,
+          time: 0.4,
+          walking: false,
+          sitting: false,
+          ...(role ? { uniform: UNIFORM[role], role } : {}),
+          ...pose,
+        } as PersonOptions);
+        const where = `${role ?? 'guest'} ${name} ${facing}`;
+        if (rec.fills.length < 40) thin.push(`${where}: ${rec.fills.length} fills`);
+        const box = rec.bounds();
+        const midX = (box.minX + box.maxX) / 2;
+        // A carried tray is held out to the side, so the silhouette leans; the
+        // body underneath still has to be over the tile the figure stands on.
+        const off = pose.carrying ? 13 : 8;
+        if (
+          Math.abs(midX) > off ||
+          box.maxY > 10 ||
+          box.minY > -34 ||
+          box.minY < -2.38 * TILE_Z + 15 ||
+          box.maxX - box.minX > TILE_W * 1.1
+        ) {
+          adrift.push(`${where}: ${JSON.stringify(box)}`);
+        }
+        if (rec.fills.some((p) => !p.curved)) boxy.push(where);
+      }
+    }
+  }
+  check('every pose of every role in every facing drew', drawn === 144, `${drawn} figures`);
+  check('none of them came out thin', thin.length === 0, thin.slice(0, 3).join('; '));
+  check('none of them drifted off their tile', adrift.length === 0, adrift.slice(0, 2).join('; '));
+  check('and none of them is made of boxes', boxy.length === 0, boxy.slice(0, 3).join('; '));
+
+  // The three uniforms, by the colour that names each of them on the sheet.
+  const staff = (role: StaffRole): Recorder =>
+    paintPerson(look, {
+      facing: 'se',
+      time: 0.4,
+      walking: false,
+      sitting: false,
+      uniform: UNIFORM[role],
+      role,
+    });
+  const waiter = staff('waiter');
+  const chef = staff('chef');
+  const cleaner = staff('cleaner');
+  const painted = (rec: Recorder, colour: string): boolean =>
+    rec.fills.some((p) => p.color.includes(colour)) ||
+    rec.strokes.some((p) => p.color.includes(colour)) ||
+    rec.fills.some((p) => p.color.includes(faces(colour).top));
+
+  check('the waiter wears the sky-blue waistcoat', painted(waiter, SHEET.sky), SHEET.sky);
+  check('and a cap with the badge on it', painted(waiter, SHEET.butter));
+  check('the chef wears whites', painted(chef, '#fffdf8'));
+  check('with a tomato neckerchief', painted(chef, SHEET.tomato));
+  check('the cleaner wears the mint apron', painted(cleaner, SHEET.mint));
+  check('and the mint headscarf', painted(cleaner, SHEET.mintDeep));
+  // Silhouette alone has to name the job, because from behind that is all there is.
+  const height = (rec: Recorder): number => -rec.bounds().minY;
+  const guest = paintPerson(look, { facing: 'se', time: 0.4, walking: false, sitting: false });
+  check('the toque makes the chef the tallest of them', height(chef) > height(guest) + 3);
+  check('the cleaner is not wearing it', height(cleaner) < height(chef));
+  for (const facing of ['ne', 'nw'] as const) {
+    const away = paintPerson(look, {
+      facing,
+      time: 0.4,
+      walking: false,
+      sitting: false,
+      uniform: UNIFORM.chef,
+      role: 'chef',
+    });
+    check(`the toque still reads with the chef facing ${facing}`, painted(away, '#fffdf8'));
+  }
+
+  // The guests. Every one of the sheet's five extras has to be reachable from
+  // the appearances the game actually generates, or a walk-in crowd is clones.
+  const seen = new Set<string>();
+  for (let i = 0; i < 400; i++) {
+    const who = appearanceFrom(`guest-${i}`);
+    const rec = paintPerson(who, { facing: 'se', time: 0.4, walking: false, sitting: false });
+    if (rec.fills.some((p) => p.color.includes('#f3a0bc'))) seen.add('flower');
+    if (who.hairStyle === 'bald') seen.add('moustache');
+    if (rec.fills.some((p) => p.color.includes(faces(shade(who.shirt, 1.04)).top))) seen.add('hood');
+    if (rec.fills.some((p) => p.color.includes(faces(shade(who.pants, 1.18)).top))) seen.add('flatCap');
+    if (rec.fills.some((p) => p.color.includes(shade(who.shirt, 0.58)))) seen.add('scarf');
+    if (who.build < 0.97 && rec.fills.some((p) => p.color === SHEET.cream)) seen.add('stripes');
+  }
+  for (const extra of ['flower', 'moustache', 'hood', 'flatCap', 'scarf', 'stripes']) {
+    check(`a guest turns up with the sheet's ${extra}`, seen.has(extra));
+  }
+});
+
+// ------------------------------------------------------------------ the sheets
+
+/** Paint one piece of furniture and hand back what it painted. */
+function paintProp(def: FurnitureDef, opts: Partial<FurnitureDrawOptions> = {}): Recorder {
+  const rec = new Recorder();
+  const ctx = rec as unknown as CanvasRenderingContext2D;
+  if (isWallProp(def.shape)) drawWallItem(ctx, def, 0, 0, 'ne', 0.4);
+  else drawFurniture(ctx, def, 0, 0, { time: 0.4, ...opts });
+  return rec;
+}
+
+/**
+ * The furniture sheet: a table, a bistro table, a stool, a chair, a booth, two
+ * stoves, two counters, a basin, a bin, a plant, a lamp, a jukebox, a rug, a
+ * clock and a framed burger. Every shape in the catalogue has to resolve to one
+ * of those sprites, and every sprite has to land on the tile it was asked for —
+ * a piece of furniture drawn a tile away from its footprint is a piece the
+ * player cannot tap.
+ */
+group('The furniture sheet has a sprite for every piece in the catalogue', () => {
+  const floorIds = Object.keys(PROP_SPRITES.floor);
+  const wallIds = Object.keys(PROP_SPRITES.wall);
+  check('the sheet is split into floor and wall pieces', floorIds.length > 20 && wallIds.length === 3);
+  check(
+    'and the wall pieces are the three that hang on a wall',
+    WALL_PROP_IDS.every((id) => wallIds.includes(id)) && wallIds.length === WALL_PROP_IDS.length,
+    wallIds.join(', '),
+  );
+
+  const missing: string[] = [];
+  const misplaced: string[] = [];
+  for (const def of FURNITURE) {
+    const sprite = propSpriteFor(def.shape);
+    if (typeof sprite.draw !== 'function') {
+      missing.push(`${def.id} (${def.shape})`);
+      continue;
+    }
+    const onWall = def.role === 'wallDecor';
+    if (onWall !== (sprite.plane === 'wall')) misplaced.push(`${def.id} on the ${sprite.plane}`);
+  }
+  check('every catalogue piece has a sprite', missing.length === 0, missing.join(', '));
+  check(
+    'and wall decor is the only thing drawn on a wall',
+    misplaced.length === 0,
+    misplaced.join(', '),
+  );
+
+  const thin: string[] = [];
+  const adrift: string[] = [];
+  const unlined: string[] = [];
+  for (const def of FURNITURE) {
+    const rec = paintProp(def, { active: def.role === 'stove' });
+    const marks = rec.fills.length + rec.strokes.length;
+    if (marks < 4) thin.push(`${def.id}: ${marks} marks`);
+    if (rec.strokes.length === 0) unlined.push(def.id);
+    const box = rec.bounds();
+    const midX = (box.minX + box.maxX) / 2;
+    if (def.role === 'wallDecor') {
+      // Authored above its anchor on the wall, never below it, or it would hang
+      // through the floor.
+      if (box.maxY > 4 || box.minY < -70) adrift.push(`${def.id}: ${JSON.stringify(box)}`);
+      continue;
+    }
+    if (
+      Math.abs(midX) > 10 ||
+      // A rug covers its whole tile, so the near corner of the diamond is as
+      // far down the screen as anything on the floor is allowed to reach.
+      box.maxY > TILE_H / 2 + 5 ||
+      box.minY > -8 ||
+      box.minY < -3.2 * TILE_Z ||
+      box.maxX - box.minX > TILE_W * 1.6
+    ) {
+      adrift.push(`${def.id}: ${JSON.stringify(box)}`);
+    }
+  }
+  check('every piece is drawn from more than a couple of fills', thin.length === 0, thin.join(', '));
+  check('every piece carries the sheet line', unlined.length === 0, unlined.join(', '));
+  check('every piece stands on the tile it was given', adrift.length === 0, adrift.slice(0, 3).join('; '));
+
+  // The reads the simulation leans on: a table you can see needs wiping, a stove
+  // you can see is lit, and a ghost that does not paint itself onto the room.
+  const table = FURNITURE_BY_ID.table_square!;
+  const clean = paintProp(table);
+  const dirty = paintProp(table, { dirty: true });
+  check(
+    'a dirty table looks different from a clean one',
+    dirty.fills.length !== clean.fills.length ||
+      dirty.fills.some((p) => !clean.fills.some((q) => q.color === p.color)),
+  );
+  const stove = FURNITURE_BY_ID.stove_gas!;
+  const cold = paintProp(stove);
+  const lit = paintProp(stove, { active: true });
+  check('a working stove shows a flame', lit.fills.length > cold.fills.length);
+  const ghost = paintProp(table, { ghost: true });
+  check('a ghost still draws the whole piece', ghost.fills.length >= clean.fills.length - 2);
+  const tinted = paintProp(table, { tint: 'rgba(255,0,0,0.3)' });
+  check('a tinted piece still draws', tinted.fills.length > clean.fills.length);
+});
+
+/**
+ * The menu sheet draws fourteen dishes by name; the rest of the menu falls back
+ * through its plate style onto the nearest one. Both halves of that mapping have
+ * to stay complete, and a plate has to stay the size of a plate: the tray a
+ * waiter carries and the thought bubble over a guest are both built round it.
+ */
+group('The menu sheet has a sprite for every recipe', () => {
+  const named = Object.keys(DISH_ART);
+  check('the fourteen dishes on the sheet are mapped by name', named.length === 14, `${named.length}`);
+  const strays = named.filter((id) => !DISHES_BY_ID[id]);
+  check('and every one of them is a real recipe', strays.length === 0, strays.join(', '));
+  const artIds = new Set(Object.keys(DISH_SPRITES));
+  const danglingArt = [...Object.values(DISH_ART), ...Object.values(PLATE_ART)].filter(
+    (id: DishArtId) => !artIds.has(id),
+  );
+  check('nothing maps to a sprite that is not there', danglingArt.length === 0, danglingArt.join(', '));
+
+  const unused = [...artIds].filter(
+    (id) =>
+      !Object.values(DISH_ART).includes(id as DishArtId) &&
+      !Object.values(PLATE_ART).includes(id as DishArtId),
+  );
+  check('and no sprite is left unreachable', unused.length === 0, unused.join(', '));
+
+  const oversize: string[] = [];
+  const unlined: string[] = [];
+  const platedStyles = new Set<string>();
+  for (const dish of DISHES) {
+    const art = DISH_SPRITES[artFor(dish)];
+    check(`${dish.id} resolves to a sprite`, !!art);
+    platedStyles.add(art.plate);
+    const rec = new Recorder();
+    drawPlatedDish(rec as unknown as CanvasRenderingContext2D, dish, 0, 0, 1);
+    if (rec.strokes.length === 0) unlined.push(dish.id);
+    const box = rec.bounds();
+    // Sized against the plate: the food sits on it and above it, never under it.
+    if (box.maxX - box.minX > 36 || box.minY < -30 || box.maxY > 10) {
+      oversize.push(`${dish.id}: ${JSON.stringify(box)}`);
+    }
+  }
+  check('every dish keeps to the size of a plate', oversize.length === 0, oversize.slice(0, 3).join('; '));
+  check('every dish carries the sheet line', unlined.length === 0, unlined.join(', '));
+  check(
+    'the sheet serves food on plates, in bowls, on a board and in the hand',
+    platedStyles.size === 4,
+    [...platedStyles].join(', '),
+  );
+
+  // A tray in a waiter's hand is the same plate at 62%, so it has to survive
+  // being drawn small as well as large.
+  const small = new Recorder();
+  drawPlatedDish(small as unknown as CanvasRenderingContext2D, DISHES[0]!, 0, 0, 0.62);
+  check('a plate on a tray is drawn smaller, not differently', small.fills.length > 6);
+});
+
+/**
+ * The street opposite the diner. It is the one part of the town the approved art
+ * draws in full, so its shape is asserted rather than rolled: single-storey
+ * shops, flat roofs sitting on the plane their walls stop at, nothing standing on
+ * top of them, the five trades cycling along the row — and a frame that actually
+ * reaches across the road to show it.
+ */
+group('The shops opposite are the approved row', () => {
+  check('the sheet has five trades', TRADES.length === 5, TRADES.join(', '));
+  const cycle = [0, 1, 2, 3, 4].map((i) => tradeAt(i));
+  check('and a run of five plots is one of each', new Set(cycle).size === 5, cycle.join(', '));
+  check('the row repeats rather than running out', tradeAt(5) === tradeAt(0));
+  check('and it counts backwards too', tradeAt(-1) === tradeAt(4));
+
+  let plans = 0;
+  const seams: string[] = [];
+  const stacked: string[] = [];
+  const gear: string[] = [];
+  const oversail: string[] = [];
+  const towering: string[] = [];
+  for (const spanX of [1.5, 2.4, 3.5, 3.8]) {
+    for (const spanY of [1.5, 2.4, 3.5, 3.8]) {
+      for (const height of [1.6, 1.7, 1.92]) {
+        for (const seed of [0, 3, 41, 137, -19]) {
+          for (const trade of TRADES) {
+            plans++;
+            const plan = planShopRow(spanX, spanY, height, seed, trade);
+            const where = `${spanX}x${spanY} h${height} ${trade}`;
+            const seam = roofSeam(300, 200, plan);
+            if (seam.walls.x !== seam.roof.x || seam.walls.y !== seam.roof.y) seams.push(where);
+            if (
+              seam.roofFoot[0] > seam.wallFoot[0] + 1e-9 ||
+              seam.roofFoot[1] > seam.wallFoot[1] + 1e-9
+            ) {
+              oversail.push(where);
+            }
+            if (plan.storeys.length !== 1) stacked.push(`${where}: ${plan.storeys.length} storeys`);
+            if (plan.roof.kind !== 'deck' || plan.roof.rise !== 0) stacked.push(`${where}: pitched`);
+            if (plan.gear.length) gear.push(where);
+            if (plan.roof.level + plan.roof.parapet > 2.2) towering.push(where);
+            if (plan.trade !== trade || !plan.sign) stacked.push(`${where}: unnamed`);
+          }
+        }
+      }
+    }
+  }
+  check('every shape of shop in the row was planned', plans === 1200, `${plans} plans`);
+  check('their roofs sit on the plane their walls stop at', seams.length === 0, seams.slice(0, 3).join('; '));
+  check('no roof oversails onto the pavement', oversail.length === 0, oversail.slice(0, 3).join('; '));
+  check('every shop is a single storey under a flat roof', stacked.length === 0, stacked.slice(0, 3).join('; '));
+  check('nothing is parked on a shop roof', gear.length === 0, gear.slice(0, 3).join('; '));
+  check('and none of them grows into a tower', towering.length === 0, towering.slice(0, 3).join('; '));
+
+  // The street plan itself: pavement, road, pavement, shops, in that order, with
+  // room to stand on both sides of the traffic.
+  const p = STREET_PLAN;
+  check('the pavement round the diner is wide enough to walk', p.pave >= 2);
+  check('the road is beyond it', p.roadFrom === p.pave + 1 && p.roadTo > p.roadFrom);
+  check('there is pavement on the far side too', p.shopsFrom > p.roadTo + 1);
+  check('the shops stand on a band of their own', p.shopsTo >= p.shopsFrom + 2);
+  check('and each of them gets a frontage', p.unit >= 3);
+
+  // The composition: a hard refresh has to show the row across the street, and
+  // still have the dining room as the thing in front of you.
+  for (const size of [8, 12, 16]) {
+    const box = buildingBox(size);
+    const frontage = tileToWorld(-p.shopsFrom, -p.shopsFrom);
+    const behind = tileToWorld(-p.shopsTo - 1, -p.shopsTo - 1);
+    check(
+      `a ${size}x${size} diner is framed with the shops in view`,
+      box.y <= frontage.y,
+      `frame top ${box.y.toFixed(0)} vs shopfront ${frontage.y.toFixed(0)}`,
+    );
+    check(
+      `and a ${size}x${size} diner still fills its own frame`,
+      box.y > behind.y,
+      `frame top ${box.y.toFixed(0)}`,
+    );
+  }
+  check('the frame reaches across the road on purpose', STREET_IN_FRAME > p.roadTo - p.pave);
 });
 
 group('Tapping a dirty table sends somebody to wipe it', () => {

@@ -432,6 +432,36 @@ export function drawBench(ctx: CanvasRenderingContext2D, cx: number, cy: number)
   ctx.fillRect(cx - 16, cy - 17, 32, 1.4);
 }
 
+/**
+ * The post box on the far pavement. Small, but it is the piece of street
+ * furniture that says "this is a town" rather than "this is a road", and the
+ * approved street has one standing opposite the door.
+ */
+export function drawMailbox(ctx: CanvasRenderingContext2D, cx: number, cy: number): void {
+  ctx.fillStyle = alpha('#2a1c14', 0.22);
+  ctx.beginPath();
+  ctx.ellipse(cx + 2, cy + 1, 9, 4, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Legs, body, domed lid, and the slot across the front.
+  ctx.fillStyle = '#2f4f6b';
+  ctx.fillRect(cx - 5, cy - 10, 2.6, 10);
+  ctx.fillRect(cx + 2.4, cy - 10, 2.6, 10);
+  ctx.fillStyle = '#3d6d94';
+  roundRect(ctx, cx - 9, cy - 26, 18, 17, 3);
+  ctx.fill();
+  ctx.fillStyle = '#4f88b4';
+  ctx.beginPath();
+  ctx.ellipse(cx, cy - 26, 9, 5, 0, Math.PI, 0);
+  ctx.fill();
+  ctx.fillStyle = '#22364a';
+  roundRect(ctx, cx - 6, cy - 22, 12, 2.6, 1.3);
+  ctx.fill();
+  ctx.fillStyle = alpha('#ffffff', 0.22);
+  roundRect(ctx, cx - 7.5, cy - 18, 3, 7, 1.5);
+  ctx.fill();
+}
+
 /** A run of clipped hedge, used to edge the little parks. */
 export function drawHedge(
   ctx: CanvasRenderingContext2D,
@@ -808,6 +838,39 @@ const AWNINGS = [
   '#2f5f7a',
 ] as const;
 
+/**
+ * The five shops the approved street draws, in the order they run along it. The
+ * row opposite the diner is always these five, cycling, so the view a player
+ * opens the game on is the view that was signed off.
+ */
+export type Trade = 'books' | 'pets' | 'cleaners' | 'bakery' | 'flowers';
+
+export const TRADES: readonly Trade[] = ['books', 'pets', 'cleaners', 'bakery', 'flowers'];
+
+interface TradeStyle {
+  /** What the name board says. */
+  label: string;
+  /** Awning and door colour. */
+  awning: string;
+  /** Wall colour, kept muted so the awnings and boards do the shouting. */
+  wall: string;
+  trim: string;
+}
+
+const TRADE_STYLES: Record<Trade, TradeStyle> = {
+  books: { label: 'BOOKS', awning: '#3f7d4c', wall: '#e3d3b4', trim: '#fdf6e4' },
+  pets: { label: 'PET SHOP', awning: '#c0483a', wall: '#b4614a', trim: '#fdf1dc' },
+  cleaners: { label: 'CLEANERS', awning: '#3c86b0', wall: '#c8d3da', trim: '#fbfdff' },
+  bakery: { label: 'BAKERY', awning: '#b8654a', wall: '#c9a877', trim: '#fff6e2' },
+  flowers: { label: 'FLOWERS', awning: '#4f8f5a', wall: '#dcd3bc', trim: '#fffaec' },
+};
+
+/** The trade of the plot `index` places along a row. */
+export function tradeAt(index: number): Trade {
+  const n = TRADES.length;
+  return TRADES[((index % n) + n) % n]!;
+}
+
 /** Roof deck surfaces: felt, gravel, lead. */
 const DECKS = ['#8d8778', '#9a9081', '#7f8a8c', '#a09681'] as const;
 
@@ -865,6 +928,8 @@ export interface BuildingPlan {
   valance: 0 | 1 | 2;
   /** A name board over the shopfront. */
   sign: boolean;
+  /** Set on the shops in the row opposite the diner; null further out in town. */
+  trade: Trade | null;
   seed: number;
 }
 
@@ -946,6 +1011,54 @@ export function planStreetBuilding(
     front,
     valance: roll(seed, 11) < 0.22 ? 0 : roll(seed, 12) > 0.45 ? 2 : 1,
     sign: roll(seed, 13) > 0.18,
+    trade: null,
+    seed,
+  };
+}
+
+/**
+ * A shop in the row across the street from the diner.
+ *
+ * This is the one building in the game the approved street draws in full, so its
+ * plan is fixed rather than rolled: one storey, a flat roof sitting on the walls
+ * it caps at exactly the plane they stop at, a low parapet, nothing standing on
+ * top of it and a striped awning over a named shopfront. A neighbour's roof on
+ * the pavement is the bug this shape exists to make impossible, so
+ * {@link roofSeam} holds for these plans just as it does for the town's.
+ */
+export function planShopRow(
+  spanX: number,
+  spanY: number,
+  height: number,
+  seed: number,
+  trade: Trade,
+): BuildingPlan {
+  const t = TRADE_STYLES[trade];
+  const storeys: Storey[] = [{ base: 0, top: height, sx: spanX, sy: spanY }];
+  const roof: RoofPlan = {
+    kind: 'deck',
+    level: height,
+    sx: spanX,
+    sy: spanY,
+    parapet: 0.13,
+    rise: 0,
+    ridge: spanX >= spanY ? 'x' : 'y',
+    crown: false,
+  };
+
+  return {
+    storeys,
+    roof,
+    gear: [],
+    style: { wall: t.wall, trim: t.trim, accent: t.awning, courses: false },
+    awning: t.awning,
+    deck: '#9a9384',
+    // The wider elevation faces along the street, which is where the frontage
+    // belongs; the row is always laid out wider than it is deep.
+    front: spanX > spanY ? 'left' : 'right',
+    valance: 2,
+    sign: true,
+    trade,
     seed,
   };
 }
@@ -1065,7 +1178,18 @@ export function drawShopBlock(
    */
   zoom = 1,
 ): void {
-  const plan = planStreetBuilding(spanX, spanY, height, seed);
+  drawBuilding(ctx, cx, cy, planStreetBuilding(spanX, spanY, height, seed), night, zoom);
+}
+
+/** Draws a building from a plan, whoever planned it. */
+export function drawBuilding(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  plan: BuildingPlan,
+  night = 0,
+  zoom = 1,
+): void {
   const { style } = plan;
   const ground = plan.storeys[0]!;
   const fine = zoom > 0.72;
@@ -1090,7 +1214,7 @@ export function drawShopBlock(
       const lit = side === 'right' ? 1 : 0.84;
       const front = side === plan.front;
       if (i === 0) {
-        if (front) drawShopElevation(ctx, w, h, plan, lit, night, fine);
+        if (front) drawShopElevation(ctx, w, h, plan, lit, night, fine, side === 'left');
         else drawFlankElevation(ctx, w, h, plan, lit, night);
       } else {
         drawUpperElevation(ctx, w, h, plan, lit, night, i, fine);
@@ -1165,6 +1289,8 @@ function drawShopElevation(
   lit: number,
   night: number,
   fine: boolean,
+  /** The left-hand wall's plane is mirrored, which lettering has to undo. */
+  mirrored: boolean,
 ): void {
   const { style } = plan;
   const trim = tone(style.trim, lit);
@@ -1214,10 +1340,135 @@ function drawShopElevation(
   if (fine) ctx.rect(doorX + doorW - 4.2, -h * 0.22, 1.6, 4.2);
   ctx.fill();
 
+  // What the shop sells, in its window. Five displays rather than five signs is
+  // what makes the row read as a parade of shops from across the street.
+  if (fine && plan.trade) {
+    drawWindowDisplay(ctx, pad, glass, paneW, -glass - riser, plan.trade, lit);
+  }
+
   if (plan.valance) drawValance(ctx, pad - 2.5, glass - 1, paneW + 5, plan, lit, fine);
   if (plan.sign) {
-    drawNameBoard(ctx, pad - 2.5, sign, w - pad * 2 + 5, signH, plan, lit, night, fine);
+    drawNameBoard(ctx, pad - 2.5, sign, w - pad * 2 + 5, signH, plan, lit, night, fine, mirrored);
   }
+}
+
+/**
+ * The goods behind the glass, one arrangement per trade. Drawn inside the pane
+ * and clipped to it, in the wall's own plane, so a display leans with the
+ * building rather than floating in front of it.
+ */
+function drawWindowDisplay(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  trade: Trade,
+  lit: number,
+): void {
+  if (w < 12 || h < 10) return;
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(x, y, w, h);
+  ctx.clip();
+  const floor = y + h;
+  const shelf = (at: number): number => y + h * at;
+
+  switch (trade) {
+    case 'books': {
+      // Two shelves of spines.
+      for (const at of [0.42, 0.78]) {
+        ctx.fillStyle = tone('#8a6a45', lit);
+        ctx.fillRect(x + 2, shelf(at), w - 4, 2);
+        const spines = Math.max(3, Math.floor((w - 6) / 4));
+        for (let i = 0; i < spines; i++) {
+          const n = tileNoise(i * 7 + Math.round(at * 10), i * 3);
+          ctx.fillStyle = tone(['#b8474b', '#3f6f8f', '#c58a2e', '#4f8f5a'][i % 4]!, lit);
+          const bh = 8 + n * 4;
+          ctx.fillRect(x + 3 + i * 4, shelf(at) - bh, 3, bh);
+        }
+      }
+      break;
+    }
+    case 'pets': {
+      // A hutch with straw, and a bird cage hanging beside it.
+      ctx.fillStyle = tone('#c8a877', lit);
+      ctx.fillRect(x + 3, floor - 14, Math.min(20, w * 0.5), 12);
+      ctx.fillStyle = tone('#e8c46a', lit);
+      ctx.fillRect(x + 5, floor - 6, Math.min(16, w * 0.42), 4);
+      ctx.strokeStyle = tone('#7d8890', lit);
+      ctx.lineWidth = 1.2;
+      const cage = x + w - 10;
+      ctx.beginPath();
+      ctx.arc(cage, y + 12, 6, 0, Math.PI * 2);
+      ctx.moveTo(cage, y + 2);
+      ctx.lineTo(cage, y + 6);
+      ctx.stroke();
+      ctx.fillStyle = tone('#f2c14e', lit);
+      ctx.beginPath();
+      ctx.arc(cage, y + 12, 2.2, 0, Math.PI * 2);
+      ctx.fill();
+      break;
+    }
+    case 'cleaners': {
+      // A rail of pressed shirts under wraps.
+      ctx.strokeStyle = tone('#98a2a8', lit);
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.moveTo(x + 2, y + 8);
+      ctx.lineTo(x + w - 2, y + 8);
+      ctx.stroke();
+      const shirts = Math.max(2, Math.floor((w - 6) / 8));
+      for (let i = 0; i < shirts; i++) {
+        const sx = x + 4 + i * 8;
+        ctx.fillStyle = tone(i % 2 === 0 ? '#fbfdff' : '#dfe8ee', lit);
+        ctx.beginPath();
+        ctx.moveTo(sx, y + 9);
+        ctx.lineTo(sx + 6, y + 9);
+        ctx.lineTo(sx + 5, floor - 6);
+        ctx.lineTo(sx + 1, floor - 6);
+        ctx.closePath();
+        ctx.fill();
+      }
+      break;
+    }
+    case 'bakery': {
+      // A counter of loaves and a tray of buns.
+      ctx.fillStyle = tone('#a9713f', lit);
+      ctx.fillRect(x + 2, floor - 10, w - 4, 8);
+      for (let i = 0; i * 9 < w - 8; i++) {
+        ctx.fillStyle = tone(i % 2 === 0 ? '#d8a25c' : '#c08a44', lit);
+        ctx.beginPath();
+        ctx.ellipse(x + 7 + i * 9, floor - 12, 4, 2.6, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.fillStyle = tone('#e8c46a', lit);
+      ctx.fillRect(x + 3, y + 7, Math.min(14, w * 0.4), 3);
+      break;
+    }
+    default: {
+      // Buckets of blooms on the floor of the window.
+      for (let i = 0; i * 10 < w - 6; i++) {
+        const bx = x + 6 + i * 10;
+        ctx.fillStyle = tone('#6f7f88', lit);
+        ctx.fillRect(bx - 3.5, floor - 9, 7, 7);
+        for (let j = 0; j < 3; j++) {
+          ctx.fillStyle = tone(['#e2607f', '#f2b04a', '#c76ec0'][(i + j) % 3]!, lit);
+          ctx.beginPath();
+          ctx.arc(bx - 3 + j * 3, floor - 12 - (j % 2) * 3, 2.2, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.strokeStyle = tone('#4f8f5a', lit);
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(bx, floor - 9);
+        ctx.lineTo(bx, floor - 13);
+        ctx.stroke();
+      }
+      break;
+    }
+  }
+  ctx.restore();
 }
 
 /**
@@ -1362,7 +1613,9 @@ function drawValance(
   lit: number,
   fine: boolean,
 ): void {
-  const drop = 9;
+  // The shops opposite the diner carry the deep striped awnings the sheet draws;
+  // the rest of the town gets the shallower valance that reads at a distance.
+  const drop = plan.trade ? 13 : 9;
   const bands = Math.max(3, Math.round(w / 11));
   const bandW = w / bands;
   const bandA = tone(plan.awning, lit);
@@ -1402,12 +1655,43 @@ function drawNameBoard(
   lit: number,
   night: number,
   fine: boolean,
+  mirrored = false,
 ): void {
   ctx.fillStyle = tone(plan.style.accent, lit * 0.86);
   ctx.fillRect(x, y, w, h);
   ctx.fillStyle = alpha('#000000', 0.16);
   ctx.fillRect(x, y + h - 1.6, w, 1.6);
   if (!fine) return;
+
+  // The shops opposite the diner have names, and they are close enough to the
+  // camera to read them. The board is already in the wall's plane, so the
+  // lettering leans with the building rather than floating across it.
+  const label = plan.trade ? TRADE_STYLES[plan.trade].label : null;
+  if (label) {
+    const colour = blend(tone('#fff6de', lit), '#ffe9b0', night * 0.6);
+    ctx.save();
+    // The wall plane this board is painted on runs backwards on the left-hand
+    // elevation, so the lettering is flipped back before it is set.
+    if (mirrored) {
+      ctx.translate(x * 2 + w, 0);
+      ctx.scale(-1, 1);
+    }
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    let size = Math.min(h * 0.72, 9);
+    ctx.font = `700 ${size}px Fredoka, Nunito, system-ui, sans-serif`;
+    const room = w - 6;
+    const measured = ctx.measureText(label).width;
+    // A long trade name gets set smaller rather than clipped or squeezed.
+    if (measured > room && measured > 0) {
+      size = Math.max(5, (size * room) / measured);
+      ctx.font = `700 ${size}px Fredoka, Nunito, system-ui, sans-serif`;
+    }
+    ctx.fillStyle = colour;
+    ctx.fillText(label, x + w / 2, y + h / 2 + 0.5);
+    ctx.restore();
+    return;
+  }
 
   // Lettering, as a run of bars. Real glyphs would be unreadable at this size
   // and would need a font; a rhythm of bars reads as a shop name and does not.

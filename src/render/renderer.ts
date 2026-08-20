@@ -1,6 +1,6 @@
 import type { Camera } from '../engine/camera';
 import type { Fx } from '../engine/fx';
-import { depthOf, facingTowards, TILE_W, TILE_Z, tileToWorld, type Facing } from '../engine/iso';
+import { depthOf, facingTowards, TILE_H, TILE_W, TILE_Z, tileToWorld, type Facing } from '../engine/iso';
 import { DISHES_BY_ID } from '../game/data/dishes';
 import { FURNITURE_BY_ID } from '../game/data/furniture';
 import { UNIFORM } from '../game/data/people';
@@ -11,10 +11,12 @@ import type { Game } from '../game/state';
 import type { Customer, Placed, Staff } from '../game/types';
 import {
   drawBench,
+  drawBuilding,
   drawFloorGlow,
   drawFloorTile,
   drawHedge,
   drawLawnTile,
+  drawMailbox,
   drawPathTile,
   drawPaveTile,
   drawPendantLamp,
@@ -28,31 +30,69 @@ import {
   drawWallCap,
   drawWallPanel,
   drawWindow,
+  planShopRow,
   skyPalette,
   tileNoise,
+  tradeAt,
   WORLD,
   type SkyPalette,
   type WallStyle,
 } from './scenery';
+import { drawPlatedDish } from './plates';
+import { drawFurniture, drawWallItem } from './props';
 import { diamondPath, mix, roundRect, withAlpha } from './shapes';
-import { drawFurniture, drawPerson, drawPlatedDish, drawWallItem } from './sprites';
+import { drawPerson } from './sprites';
 
 /** Height of the two back walls, in tile-height units. */
 const WALL_HEIGHT = 2.35;
 
 /**
- * The box the building occupies on screen, in world pixels: the floor diamond
- * plus the slab that oversails it, the walls standing above it and headroom for
- * the hanging sign. The camera frames this, so it lives next to the code that
- * decides how tall the walls are.
+ * The street the approved art draws, as rings of tiles out from the diner: two
+ * tiles of pavement round the building, a plain grey two-lane road, pavement
+ * again on the far side, then the row of shops. The wide pavements are the point
+ * — the street that was signed off has room to breathe either side of the
+ * traffic — and because it is expressed as distances it works at any grid size.
  */
-export function buildingBox(size: number): { x: number; y: number; w: number; h: number } {
+export const STREET_PLAN = {
+  /** Pavement hugging the diner runs 1 tile out to here. */
+  pave: 2,
+  roadFrom: 3,
+  roadTo: 4,
+  /** The shops opposite stand on this band, and their pavement is what is left. */
+  shopsFrom: 6,
+  shopsTo: 8,
+  /** Tiles of street frontage each shop in the row gets. */
+  unit: 4,
+} as const;
+
+/**
+ * How much of the street beyond the far walls the camera keeps in frame, in
+ * tiles along each grid axis. The approved view is the diner in the foreground
+ * with the shops across the road behind it, so the frame has to reach past the
+ * pavement, the road and the far pavement to the shopfronts — and no further,
+ * because the dining room is what the player is actually working in.
+ */
+export const STREET_IN_FRAME = 3.9;
+
+/**
+ * The box the building occupies on screen, in world pixels: the floor diamond
+ * plus the slab that oversails it, the walls standing above it, headroom for the
+ * hanging sign, and the slice of street beyond it that the composition needs.
+ * The camera frames this, so it lives next to the code that decides how tall the
+ * walls are.
+ */
+export function buildingBox(
+  size: number,
+  street = STREET_IN_FRAME,
+): { x: number; y: number; w: number; h: number } {
   const o = 0.4;
   const west = tileToWorld(-o, size + o);
   const east = tileToWorld(size + o, -o);
   const north = tileToWorld(-o, -o);
   const south = tileToWorld(size + o, size + o);
-  const top = north.y - WALL_HEIGHT * TILE_Z - 34;
+  // A tile back along both axes lifts the frame by a whole tile height, which is
+  // how far up the screen the street runs.
+  const top = north.y - WALL_HEIGHT * TILE_Z - 34 - street * TILE_H;
   const bottom = south.y + 0.4 * TILE_Z;
   return { x: west.x, y: top, w: east.x - west.x, h: bottom - top };
 }
@@ -222,32 +262,30 @@ export class Renderer {
     return Math.max(dx, dy);
   }
 
-  /**
-   * The near field is laid out as rings out from the building: pavement, a
-   * two-lane road, pavement again. That is what puts the diner on a street corner
-   * instead of in the middle of a field, and it works at any grid size.
-   */
-  private static readonly ROAD_FROM = 2;
-  private static readonly ROAD_TO = 3;
-  /** Grass verge between the road and the buildings opposite. */
-  private static readonly VERGE = 4;
-  /** The terrace of shops facing the restaurant occupies this band. */
-  private static readonly TERRACE_FROM = 6;
-  private static readonly TERRACE_TO = 8;
-  /** Beyond the terrace the town falls back to a block lattice. */
+  private static readonly ROAD_FROM = STREET_PLAN.roadFrom;
+  private static readonly ROAD_TO = STREET_PLAN.roadTo;
+  /** The shops facing the restaurant stand on this band. */
+  private static readonly TERRACE_FROM = STREET_PLAN.shopsFrom;
+  private static readonly TERRACE_TO = STREET_PLAN.shopsTo;
+  /** Beyond the shops the town falls back to a block lattice. */
   private static readonly BLOCK = 7;
   private static readonly STREET = 1;
-  /** Tiles of street frontage per shop in the terrace. */
-  private static readonly UNIT = 4;
+  /** Tiles of street frontage per shop in the row. */
+  private static readonly UNIT = STREET_PLAN.unit;
 
   /** Where a tile falls in the near-field street plan. */
-  private ringOf(tx: number, ty: number): 'inside' | 'pave' | 'road' | 'verge' | 'town' {
+  private ringOf(tx: number, ty: number): 'inside' | 'pave' | 'road' | 'town' {
     const d = this.outsideBy(tx, ty);
     if (d === 0) return 'inside';
     if (d >= Renderer.ROAD_FROM && d <= Renderer.ROAD_TO) return 'road';
-    if (d === Renderer.VERGE) return 'verge';
     if (d >= Renderer.TERRACE_FROM) return 'town';
     return 'pave';
+  }
+
+  /** True on the far pavement, between the road and the shops opposite. */
+  private isFarPavement(tx: number, ty: number): boolean {
+    const d = this.outsideBy(tx, ty);
+    return d > Renderer.ROAD_TO && d < Renderer.TERRACE_FROM;
   }
 
   /** True in the band of ground the facing terrace of shops is built on. */
@@ -283,7 +321,7 @@ export class Renderer {
    * which also leaves a clear sight line from the door out to the street.
    */
   private isApproach(tx: number, ty: number): boolean {
-    return Math.abs(tx - this.grid.doorX) <= 1 && ty < 0 && ty > -6;
+    return Math.abs(tx - this.grid.doorX) <= 1 && ty < 0 && ty > -Renderer.TERRACE_FROM - 1;
   }
 
   /** Streets, squares and planted blocks, stretching to every edge of the screen. */
@@ -320,14 +358,6 @@ export class Renderer {
             if (this.ringOf(tx + dx, ty + dy) === 'road') kerbs.push([dx, dy]);
           }
           drawPaveTile(ctx, c.x, c.y, n, kerbs);
-          continue;
-        }
-
-        if (ring === 'verge') {
-          // Planted verge, which keeps the streetscape from turning into a car
-          // park of grey and gives the street trees somewhere to stand.
-          if (this.isApproach(tx, ty)) drawPaveTile(ctx, c.x, c.y, n);
-          else drawLawnTile(ctx, c.x, c.y, n);
           continue;
         }
 
@@ -371,19 +401,26 @@ export class Renderer {
     // screen at once, so the buildings are told how much detail is worth drawing.
     const zoom = this.camera.zoom;
 
-    // ---- street trees and benches on the verge across the road
+    // ---- the pavement in front of the shops opposite: planters, the odd bench
+    // and a tree, spaced out so the sheet's breathing room survives.
     for (let ty = view.minTy; ty <= view.maxTy; ty++) {
       for (let tx = view.minTx; tx <= view.maxTx; tx++) {
-        if (this.ringOf(tx, ty) !== 'verge' || this.isApproach(tx, ty)) continue;
+        if (!this.isFarPavement(tx, ty) || this.isApproach(tx, ty)) continue;
         if (!this.inView(tx, ty, 2)) continue;
         const roll = tileNoise(tx * 17 + 3, ty * 41 + 9);
         const c = this.tileCentre(tx, ty);
-        if (roll > 0.56) {
+        const shopSide = this.outsideBy(tx, ty) === Renderer.TERRACE_FROM - 1;
+        if (shopSide && roll > 0.68) {
+          out.push({
+            depth: depthOf(tx, ty, 0.6),
+            draw: () => drawPlanter(ctx, c.x, c.y, time, tx * 13 + ty),
+          });
+        } else if (!shopSide && roll > 0.82) {
           out.push({
             depth: depthOf(tx, ty, 1),
             draw: () => drawTree(ctx, c.x, c.y, time, tx * 131 + ty),
           });
-        } else if (roll > 0.52) {
+        } else if (!shopSide && roll > 0.74) {
           out.push({ depth: depthOf(tx, ty, 0.7), draw: () => drawBench(ctx, c.x, c.y) });
         }
       }
@@ -396,8 +433,13 @@ export class Renderer {
         draw: () => drawStreetLamp(ctx, c.x, c.y, night),
       });
     }
+    const [mx, my] = this.mailboxTile();
+    if (this.inView(mx, my, 1)) {
+      const m = this.tileCentre(mx, my);
+      out.push({ depth: depthOf(mx, my, 0.9), draw: () => drawMailbox(ctx, m.x, m.y) });
+    }
 
-    this.collectTerrace(out, time, night);
+    this.collectShopRow(out, night);
 
     // ---- blocks beyond the verge
     for (let by = Math.floor(view.minTy / BLOCK); by <= Math.floor(view.maxTy / BLOCK); by++) {
@@ -474,11 +516,13 @@ export class Renderer {
   /**
    * The row of shops facing the restaurant across the street, on all four sides.
    *
-   * This is the piece that turns the surroundings into a neighbourhood: whatever
-   * else is going on further out, the player is always looking at shopfronts on
-   * the other side of the road rather than at open ground.
+   * This is the street the art was approved on: single-storey shops with flat
+   * roofs sitting flush on their walls, striped awnings over named shopfronts,
+   * and the five trades — books, pets, cleaners, bakery, flowers — cycling along
+   * the row, so whichever way the player pans they are looking at a parade of
+   * shops rather than at open ground or a wall of tower blocks.
    */
-  private collectTerrace(out: Drawable[], time: number, night: number): void {
+  private collectShopRow(out: Drawable[], night: number): void {
     const { ctx } = this;
     const zoom = this.camera.zoom;
     const { UNIT, TERRACE_FROM, TERRACE_TO } = Renderer;
@@ -507,40 +551,30 @@ export class Renderer {
         const cx = side % 2 === 0 ? along : across;
         const cy = side % 2 === 0 ? across : along;
         const seed = Math.round(cx * 71 + cy * 131 + side * 17);
-        const roll = tileNoise(seed, seed + 5);
-        if (!this.inView(cx, cy, 5, UNIT * 34)) continue;
+        if (!this.inView(cx, cy, 3, UNIT * 34)) continue;
         const c = tileToWorld(cx + 0.5, cy + 0.5);
 
-        // Roughly one plot in eight is a garden rather than a shop, which stops
-        // the far side of the street reading as a single unbroken wall.
-        if (roll > 0.87) {
-          this.collectPark(
-            out,
-            {
-              x: Math.round(cx - (UNIT - 1) / 2),
-              y: Math.round(cy - (depth - 1) / 2),
-              w: side % 2 === 0 ? UNIT : depth,
-              h: side % 2 === 0 ? depth : UNIT,
-            },
-            time,
-            seed,
-          );
-          continue;
-        }
-
-        // The plot is wider along the street than it is deep, so the building is
-        // too: a terrace of squares wastes half the frontage and reads as a row
-        // of separate cubes. Each plot gives up a little of its width so the
-        // joints between neighbours show.
-        const frontage = UNIT - 0.15 - tileNoise(seed + 41, seed - 7) * 0.35;
-        const back = depth - 0.15 - tileNoise(seed - 19, seed + 23) * 0.3;
+        // The plot is wider along the street than it is deep, so the shop is
+        // too: a row of squares wastes half the frontage and reads as a row of
+        // separate cubes. Each plot gives up a little of its width so the joints
+        // between neighbours show.
+        const frontage = UNIT - 0.2;
+        const back = depth - 0.5;
         const spanX = side % 2 === 0 ? frontage : back;
         const spanY = side % 2 === 0 ? back : frontage;
-        // Tall enough that the facade, not the roof, is what the camera sees.
-        const height = 2.3 + tileNoise(seed + 3, seed) * 2.5;
+        // Single storey, with only enough variation between neighbours to keep
+        // the parapet line from being drawn with a ruler.
+        const height = 1.7 + tileNoise(seed + 3, seed) * 0.22;
+        const plan = planShopRow(
+          spanX,
+          spanY,
+          height,
+          seed,
+          tradeAt(Math.floor((along + 0.5) / UNIT) + side),
+        );
         out.push({
           depth: depthOf(cx, cy, height),
-          draw: () => drawShopBlock(ctx, c.x, c.y, spanX, spanY, height, seed, night, zoom),
+          draw: () => drawBuilding(ctx, c.x, c.y, plan, night, zoom),
         });
       }
     }
@@ -630,15 +664,27 @@ export class Renderer {
    */
   private streetLampTiles(): Array<[number, number]> {
     const size = this.grid.size;
-    const near = -2;
-    const far = size + 1;
     const out: Array<[number, number]> = [];
-    for (let t = near; t <= far; t += 5) {
-      out.push([t, near], [near, t], [t, far], [far, t]);
+    // One run along the pavement that hugs the diner, one along the kerb
+    // opposite, offset so the two rows read as a street rather than a grid.
+    for (const [ring, phase] of [[1, 1], [Renderer.ROAD_TO + 1, 4]] as const) {
+      const near = -ring - 1;
+      const far = size + ring;
+      // Wide spacing on purpose: a lamp every few tiles turns the pavement into
+      // a fence, and the approved street has room between them.
+      for (let t = near + phase; t <= far; t += 8) {
+        out.push([t, near], [near, t], [t, far], [far, t]);
+      }
     }
-    return out.filter(
-      ([tx, ty]) => this.outsideBy(tx, ty) === 1 && !this.isApproach(tx, ty),
-    );
+    return out.filter(([tx, ty]) => {
+      const d = this.outsideBy(tx, ty);
+      return (d === 1 || d === Renderer.ROAD_TO + 1) && !this.isApproach(tx, ty);
+    });
+  }
+
+  /** The post box opposite the door, on the far kerb. */
+  private mailboxTile(): [number, number] {
+    return [this.grid.doorX + 2, -Renderer.ROAD_TO - 1];
   }
 
   /**

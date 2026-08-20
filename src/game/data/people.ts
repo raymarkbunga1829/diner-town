@@ -35,11 +35,17 @@ export const PANTS_COLORS: readonly string[] = [
   '#3a4a62', '#5a4034', '#2f4656', '#5a4554', '#3d5240', '#5c4636',
 ];
 
-/** Uniform colours by staff role, so roles are readable at a glance. */
+/**
+ * Uniform colours by staff role, straight off the approved people sheet: the
+ * chef in whites with a tomato neckerchief, the waiter in a white shirt under a
+ * sky-blue waistcoat, the cleaner in a working grey shirt under a mint apron.
+ * `trim` is the garment worn over the shirt — the waistcoat, the kerchief, the
+ * apron band — so it is what tells the three of them apart at a glance.
+ */
 export const UNIFORM: Record<'waiter' | 'chef' | 'cleaner', { shirt: string; trim: string }> = {
-  waiter: { shirt: '#fff6e4', trim: '#c73a2e' },
-  chef: { shirt: '#fffdf8', trim: '#c73a2e' },
-  cleaner: { shirt: '#7ed0c4', trim: '#2a6f68' },
+  waiter: { shirt: '#fdf6e6', trim: '#6fb3dd' },
+  chef: { shirt: '#fffdf8', trim: '#cf4436' },
+  cleaner: { shirt: '#e6ded0', trim: '#3f8f74' },
 };
 
 export type HairStyle = 'short' | 'bun' | 'long' | 'cap' | 'bald' | 'curly';
