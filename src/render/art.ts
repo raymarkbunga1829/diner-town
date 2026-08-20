@@ -5,7 +5,7 @@
  * plated food and the street — and everything they have in common lives here:
  * the cream / tomato / oak palette they are painted from, the warm brown ink
  * every silhouette is held together with, and the handful of primitives that put
- * those two together (a filled-and-lined blob, pill, wedge or panel).
+ * those two together: a lined blob, panel or polygon, a highlight and a shadow.
  *
  * Two rules keep the drawings on-model wherever they are used:
  *
@@ -16,7 +16,7 @@
  *    left, so a lit face is the top, and the shaded face is the lower left.
  */
 
-import { ink, mix, roundRect, shade } from './shapes';
+import { ink, mix, roundRect } from './shapes';
 
 /**
  * The sheets' palette. Named for what the colour is for rather than what it is,
@@ -26,15 +26,11 @@ import { ink, mix, roundRect, shade } from './shapes';
 export const SHEET = {
   /** Paper cream: walls, plates, chef whites, shop trim. */
   cream: '#fdf4e0',
-  creamDeep: '#f1e0be',
   creamShade: '#d9c49c',
   /** Diner red, on the booths, the awnings, the signage and the trim. */
   tomato: '#cf4436',
-  tomatoDeep: '#a02c22',
-  tomatoLight: '#e8705d',
   /** Oak, on every table top, counter front and chair frame. */
   oak: '#b3763c',
-  oakDeep: '#7d4d21',
   oakLight: '#d19c5c',
   /** Kitchen steel. */
   steel: '#b6bdc2',
@@ -51,7 +47,6 @@ export const SHEET = {
   skyDeep: '#3d7fa8',
   /** Butter and brass: fries, pancakes, name boards, the jukebox. */
   butter: '#f2c14e',
-  butterDeep: '#c2902a',
   /** The line every shape is drawn with. */
   ink: '#3b2a1e',
 } as const;
@@ -72,7 +67,7 @@ export interface Lined {
 }
 
 /** Fill the current path and lay the sheet's line round it. */
-export function paintPath(
+function paintPath(
   ctx: CanvasRenderingContext2D,
   fill: string,
   opts: Lined = {},
@@ -159,27 +154,6 @@ export function sheen(
   ctx.restore();
 }
 
-/**
- * The awning treatment: alternating bands of a colour and cream across a strip.
- * Used on the shop row across the street and on anything indoors that wants to
- * belong to it.
- */
-export function bands(
-  ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  w: number,
-  h: number,
-  colour: string,
-  count: number,
-): void {
-  const step = w / Math.max(1, count);
-  for (let i = 0; i < count; i++) {
-    ctx.fillStyle = i % 2 === 0 ? colour : SHEET.cream;
-    ctx.fillRect(x + i * step, y, step + 0.4, h);
-  }
-}
-
 /** A soft contact shadow, flattened into the tile plane. */
 export function groundShadow(
   ctx: CanvasRenderingContext2D,
@@ -193,9 +167,4 @@ export function groundShadow(
   ctx.beginPath();
   ctx.ellipse(x + rx * 0.1, y + ry * 0.2, rx, ry, 0, 0, Math.PI * 2);
   ctx.fill();
-}
-
-/** The three tones a sheet colour is painted in: lit, mid and shaded. */
-export function tones(base: string): { lit: string; mid: string; dark: string } {
-  return { lit: shade(base, 1.14), mid: base, dark: shade(base, 0.78) };
 }
