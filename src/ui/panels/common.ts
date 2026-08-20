@@ -3,12 +3,9 @@ import type { FurnitureDef } from '../../game/data/furniture';
 import type { Ingredient } from '../../game/data/ingredients';
 import { UNIFORM } from '../../game/data/people';
 import type { Appearance, StaffRole } from '../../game/types';
-import {
-  drawFurniturePreview,
-  drawIngredientIcon,
-  drawPerson,
-  drawPlatedDish,
-} from '../../render/sprites';
+import { drawPlatedDish } from '../../render/plates';
+import { drawFurniturePreview } from '../../render/props';
+import { drawIngredientIcon, drawPerson } from '../../render/sprites';
 import { el, makeCanvas } from '../dom';
 
 /** Previews are static snapshots; this keeps flames and water in a nice pose. */

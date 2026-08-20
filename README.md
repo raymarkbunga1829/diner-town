@@ -122,6 +122,20 @@ has to put a recipe or a shop piece in front of the player while the two capacit
 lifts stay pinned to the stars that claim them, and none of it may be visible to
 a diner on its first day.
 
+The art gets asserted rather than eyeballed, because a sprite that quietly stops
+being drawn looks exactly like a sprite nobody has looked at yet. A stand-in
+canvas records what each sprite paints, and the checks insist that every
+character on the people sheet draws in all four facings and every pose the
+simulation puts them in — walking, seated, carrying, spent, holding a notepad, a
+cloth or a pan — still centred on their tile, still the right height, still made
+only of rounded shapes, and still wearing the colour that names their job. Every
+piece in the furniture catalogue has to resolve to a sprite on the right plane
+and stand on the tile it was given; every recipe has to resolve to a dish sprite
+that keeps to the size of a plate; and the shops opposite have to stay the
+approved row — single storey, flat roof on the plane the walls stop at, nothing
+parked on top, a name on the board — with the camera framing them from the
+doorway.
+
 It finishes on the least game-like thing in the repository: it runs the real
 `public/sw.js` in-process against a stand-in cache and network, deploys a second
 build over the first, and insists the shell, the worker and the manifest all come
@@ -229,16 +243,18 @@ only), and `--panel` opens a dock panel before the capture.
 src/
   engine/     Isometric maths, camera, pointer gestures, seeded RNG, Web Audio SFX
   game/       Rules and state: data tables, grid, A* pathfinding, the simulation
-  render/     Canvas drawing: shape primitives, procedural sprites, the scene renderer
+  render/     Canvas drawing: the art sheets as sprites, shape primitives, the scene renderer
   ui/         DOM layer: status bar, dock, sliding panels, modals, tutorial
 tools/        Headless checks run by `npm run check`
 ```
 
 A few decisions worth knowing about:
 
-- **No image or audio files.** Every sprite is drawn with canvas paths from a palette on the furniture definition, and every sound effect is synthesised with the Web Audio API. That keeps the repository text-only and the download tiny.
+- **No image or audio files.** Every sprite is drawn with canvas paths, and every sound effect is synthesised with the Web Audio API. That keeps the repository text-only and the download tiny.
 - **Original 2009-diner look.** The cream, cherry and gold HUD, chibi staff and sunny dining room are original art — a genre homage, not a copy of Playfish or EA assets.
+- **Four art sheets, drawn rather than imported.** The look is set by four approved sheets — people, furniture, plated food and the street — and `render/art.ts` holds what they have in common: the cream / tomato / oak palette, the warm dark line every silhouette carries, and the primitives that put the two together. `render/props.ts` is one sprite per furniture shape, `render/plates.ts` one per dish, both keyed by the ids the catalogues and saves already use, so the art can be replaced without the simulation, the grid or a saved diner noticing. The fourteen dishes the menu sheet draws have sprites of their own; every other recipe falls back through its plate style and is tinted from its own two colours.
 - **One world, one kind of solid.** Everything on the floor is lit by the same three-tone ramp: a lit crown, a mid tone and a flank in shadow, with a soft gradient between them and one dark line round the silhouette. The people are rounded toys built from that — a squoval head about as tall as the body under it, a soft barrel of a chest, stubby capsule limbs with nubs for hands and feet, no elbow or knee anywhere — and the tables, chairs and stoves are the same iso boxes they always were with their corners taken off, so a figure standing on the tiles belongs to the chair beside it. Detail such as a face or a row of a chef's buttons is painted on the surface of the part it sits on, sheared with the facing, so it leans with the body instead of floating flat across the front of it. Figures are assembled in their own frame rather than mirrored, so somebody who turns away really does show you the back of their head.
+- **The street is take B.** Rings of tiles out from the diner: two of pavement, a plain grey two-lane road, pavement again, then a row of single-storey shops. `planShopRow` fixes the shape of those shops rather than rolling it — one storey, a flat roof at exactly the plane the walls stop at, a low parapet, nothing standing on top — and the five trades cycle along the row with named boards, striped awnings and a window display each. Interiors stay open-top and the camera frames the diner *with* the row behind it, which is the composition the art was signed off on; on a phone it reaches less far across the road, because the dining room has to stay legible.
 - **The grid is the source of truth.** `game/grid.ts` indexes placed furniture into solid / flat / wall layers and answers all the spatial questions the simulation asks. Placement is rejected if it would strand part of the floor, which is checked with a flood fill from the doorway.
 - **Persistent versus live state.** `SaveData` holds only what should survive a reload. Customers, orders and floating text are rebuilt each session, so closing the tab simply sends the current diners home.
 - **Time away is worked, not estimated.** Rather than guessing what the diner took while the tab was shut, loading a save fast-forwards the real simulation for the shift you missed, so the same code cooks out of your pantry, ends the day and draws payroll. What being away buys is *time*, and not much of it: a full night away is credited with one in-game day, which is the most that can pass without skipping a payroll or burying one day's card under the next. Playing is always worth more than not playing.

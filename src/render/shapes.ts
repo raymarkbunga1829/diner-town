@@ -456,6 +456,8 @@ export interface SoftBoxOptions {
   lid?: boolean;
   /** Outline width. Zero leaves the piece unlined. */
   line?: number;
+  /** Outline colour; defaults to the ink of the fill. */
+  outline?: string;
 }
 
 /**
@@ -507,7 +509,7 @@ export function softBox(
 
   if (opts.line !== 0) {
     roundPoly(ctx, rim, [r, r, foot, foot, foot, r]);
-    ctx.strokeStyle = ink(base, 0.42);
+    ctx.strokeStyle = opts.outline ?? ink(base, 0.42);
     ctx.lineWidth = opts.line ?? 1.1;
     ctx.lineJoin = 'round';
     ctx.stroke();
