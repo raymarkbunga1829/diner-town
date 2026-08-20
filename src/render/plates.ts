@@ -590,9 +590,13 @@ export function drawPlatedDish(
   ctx.restore();
 }
 
-/** A round tray with a plate on it, for a waiter carrying a dish out. */
+/**
+ * The waiter's tray: steel, as the people sheet draws it, with the plate riding
+ * flat on the middle of it.
+ */
 export function drawTray(ctx: CanvasRenderingContext2D, dish: Dish): void {
-  blob(ctx, 0, 0, 11.5, 5.2, SHEET.oak, { line: LINE, outline: inkOf(SHEET.oak, 0.5) });
-  blob(ctx, 0, -1, 8.6, 3.6, SHEET.oakLight, { line: 0 });
+  blob(ctx, 0, 0, 11.5, 5.2, SHEET.steelDeep, { line: LINE, outline: inkOf(SHEET.steelDeep, 0.5) });
+  blob(ctx, 0, -1, 8.8, 3.7, SHEET.steel, { line: 0 });
+  sheen(ctx, -4, -1.6, 3.2, 1.2, 0.4);
   drawPlatedDish(ctx, dish, 0, -3, 0.62);
 }
